@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="description">高德/百度/腾讯地图 开屏+首页+路线 去广告模块</string>
+    <string-array name="scope">
+        <item>com.autonavi.minimap</item>
+        <item>com.baidu.BaiduMap</item>
+        <item>com.tencent.map</item>
+    </string-array>
+</resources>
