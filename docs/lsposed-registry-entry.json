@@ -1,0 +1,29 @@
+{
+  "_comment": "追加到 LSPosed.github.io 仓库 module_config.json 的 moduleList 数组。占位符 <OWNER> 替换为你的 GitHub 用户名。signature 为 APK 签名证书 SHA-256 的 base64（小写 hex 转 base64 见 README 提交流程）。",
+  "name": "MapAdKiller",
+  "pkg": "cn.eni.mapadkiller",
+  "category": ["Advertisement"],
+  "entryClass": "de.robv.android.xposed.IXposedHookLoadPackage",
+  "screenshots": [],
+  "useRiru": false,
+  "useZygisk": false,
+  "shortDesc": "去广告：高德地图 / 百度地图 / 腾讯地图（开屏、横幅、信息流广告卡、GDT/聚合SDK）",
+  "description": "https://raw.githubusercontent.com/<OWNER>/MapAdKiller/main/README.md",
+  "icon": "https://raw.githubusercontent.com/<OWNER>/MapAdKiller/main/app/res/drawable/ic_launcher.png",
+  "authors": ["<OWNER>"],
+  "issues": "https://github.com/<OWNER>/MapAdKiller/issues",
+  "donate": "",
+  "readme": "https://raw.githubusercontent.com/<OWNER>/MapAdKiller/main/README.md",
+  "stable": [
+    {
+      "version": "1.0.0",
+      "versionCode": 1,
+      "apk": "https://github.com/<OWNER>/MapAdKiller/releases/download/v1.0.0/MapAdKiller-v1.0.0.apk",
+      "timestamp": 1788000000000,
+      "signature": "y+za6zGDbEqy/+knG0cUiBDRM186cHgtydLSnZhlVO0=",
+      "message": "Initial release: Amap/Baidu/Tencent Maps ad blocking, 56 hook points"
+    }
+  ],
+  "beta": [],
+  "canary": []
+}
