@@ -1,4 +1,4 @@
-package cn.eni.mapadkiller;
+package io.github.ldxm666.mapadkiller;
 
 /**
  * 百度地图 com.baidu.BaiduMap

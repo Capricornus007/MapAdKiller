@@ -1,4 +1,4 @@
-package cn.eni.mapadkiller;
+package io.github.ldxm666.mapadkiller;
 
 import android.app.Activity;
 import android.content.res.Resources;

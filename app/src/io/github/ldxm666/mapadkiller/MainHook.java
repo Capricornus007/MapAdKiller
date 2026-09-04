@@ -1,4 +1,4 @@
-package cn.eni.mapadkiller;
+package io.github.ldxm666.mapadkiller;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XposedBridge;
@@ -45,9 +45,9 @@ public class MainHook implements IXposedHookLoadPackage {
                 default:
                     break;
             }
-            if (lpparam.packageName.equals("cn.eni.mapadkiller")) {
+            if (lpparam.packageName.equals("io.github.ldxm666.mapadkiller")) {
                 de.robv.android.xposed.XposedHelpers.findAndHookMethod(
-                    "cn.eni.mapadkiller.StatusCheck", lpparam.classLoader, "amEnabled",
+                    "io.github.ldxm666.mapadkiller.StatusCheck", lpparam.classLoader, "amEnabled",
                     new de.robv.android.xposed.XC_MethodHook() {
                         @Override protected void beforeHookedMethod(MethodHookParam p) { p.setResult(Boolean.TRUE); }
                     });

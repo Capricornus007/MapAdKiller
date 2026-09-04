@@ -1,4 +1,4 @@
-package cn.eni.mapadkiller;
+package io.github.ldxm666.mapadkiller;
 
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;

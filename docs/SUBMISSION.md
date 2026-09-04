@@ -5,8 +5,8 @@
 ## 流程
 
 1. 在 <https://github.com/Xposed-Modules-Repo/submission> 开 issue，
-   标题 `[submission] cn.eni.mapadkiller`（本仓库已提交：issue #1729）
-2. 官方 bot 自动创建 `Xposed-Modules-Repo/cn.eni.mapadkiller` 并邀请作者为 admin（接受邀请）
+   标题 `[submission] io.github.ldxm666.mapadkiller`（本仓库已提交：issue #1729）
+2. 官方 bot 自动创建 `Xposed-Modules-Repo/io.github.ldxm666.mapadkiller` 并邀请作者为 admin（接受邀请）
 3. 向该仓库推送以下文件（本目录 `registry-pack/` 已备好，无 BOM UTF-8）：
 
 | 文件 | 内容 |
@@ -23,7 +23,7 @@
 
 ## 本模块参数
 
-- Package: `cn.eni.mapadkiller`
+- Package: `io.github.ldxm666.mapadkiller`
 - versionCode: `1` / versionName: `1.0.0` → Release tag `1-1.0.0`
 - 签名证书 SHA-256: `cbecdaeb31836c4ab2ffe9271b47148810d1335f3a70782dc9d2d29d986554ed`
   （base64: `y+za6zGDbEqy/+knG0cUiBDRM186cHgtydLSnZhlVO0=`，对应仓库内 `app/debug.keystore`，自更新需同签名）

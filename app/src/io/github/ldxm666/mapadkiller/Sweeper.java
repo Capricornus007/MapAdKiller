@@ -1,4 +1,4 @@
-package cn.eni.mapadkiller;
+package io.github.ldxm666.mapadkiller;
 
 import android.os.Handler;
 import android.os.Looper;
