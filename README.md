@@ -16,7 +16,7 @@
 | 目标 App | 包名 | 拦截内容 |
 |---|---|---|
 | 高德地图 | `com.autonavi.minimap` | 开屏广告（强制走自家 NO_SPLASH 收尾路径，不卡启动）、实时广告拉取、首页轮播 Banner、后台推送运营弹窗、搜索页模板开屏、AJX 首页联动广告数据 |
-| 百度地图 | `com.baidu.BaiduMap` | 开屏广告（Native/OpenAPI/Push 三渠道全灭）、聚合层 6 家 ADN 加载器（聚量/GroMore/美数/章鱼/趣盟/推荐位）、悬浮运营黄条（"做任务领现金"类）、首页中部横幅、BMAd 开放封装 |
+| 百度地图 | `com.baidu.BaiduMap` | 开屏广告（Native/OpenAPI/Push 三渠道全灭）、聚合层 6 家 ADN 加载器（聚量/GroMore/美数/章鱼/趣盟/推荐位）、悬浮运营黄条（"做任务领现金"类）、首页中部横幅、BMAd 开放封装 （注意！百度地图由于广告预加载原因，会在开屏页面停留，此时点击返回键即可进入主页！）|
 | 腾讯地图 | `com.tencent.map` | 广点通 GDT SDK 初始化（`initWith=false`，连带 tangramsplash / 融合 SDK 全部失效）、开屏流水线任务、首页 Banner 数据绑定、POI 列表广告卡（视图层） |
 
 另含**通用视图清扫兜底**（ViewKiller）：每次 Activity resume 后遍历视图树，命中已知广告类名/资源名即 GONE + 移除子树。
