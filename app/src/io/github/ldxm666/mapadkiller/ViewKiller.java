@@ -4,15 +4,14 @@ import android.app.Activity;
 import android.content.res.Resources;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewParent;
 
-import java.util.ArrayDeque;
-import java.util.Deque;
 import java.util.regex.Pattern;
 
 /**
- * ViewKiller — 通用视图层兜底：在 Activity onResume 后遍历 DecorView，
- * 按「类名正则」或「资源名正则」命中即 GONE。
- * 语义 hook 漏掉的广告容器，这里补刀。
+ * ViewKiller — 通用视图层兜底：Activity onResume 后遍历 DecorView，
+ * 命中「类名正则 / 资源名正则 / 无障碍"广告"标签」即 GONE + 移除子树。
+ * 广告角标（小"广告"标签）命中时上溯到列表项容器一并移除。
  */
 public final class ViewKiller {
 
@@ -27,12 +26,12 @@ public final class ViewKiller {
     }
 
     public void sweep(Activity act) {
-        if (act == null) return;
+        if (act == null || act.isFinishing()) return;
         try {
             View decor = act.getWindow().getDecorView();
             sweep(decor, act.getResources());
         } catch (Throwable t) {
-            MainHook.log(tag + " sweep err " + t);
+            H.log(android.util.Log.WARN, MainHook.TAG, tag + " sweep err " + t);
         }
     }
 
@@ -41,8 +40,23 @@ public final class ViewKiller {
         try {
             if (classPat != null && classPat.matcher(v.getClass().getName()).find()) gone = true;
             if (!gone && resPat != null && v.getId() != View.NO_ID && v.getId() != 0) {
-                String name = res.getResourceName(v.getId()); // e.g. com.tencent.map:id/view_stub_home_banner_view
+                String name = res.getResourceName(v.getId());
                 if (name != null && resPat.matcher(name).find()) gone = true;
+            }
+            // 无障碍标签识别：广告卡通常自带 "广告"/"Ad" contentDescription
+            if (!gone) {
+                CharSequence cd = v.getContentDescription();
+                if (cd == null && v instanceof android.widget.TextView) {
+                    cd = ((android.widget.TextView) v).getText();
+                }
+                if (cd != null) {
+                    String s = cd.toString();
+                    if (s.length() <= 6 && (s.contains("广告")
+                            || s.equalsIgnoreCase("Ad") || s.equalsIgnoreCase("AD"))) {
+                        v = bubbleToAdContainer(v);
+                        gone = true;
+                    }
+                }
             }
         } catch (Throwable ignored) {
             // 非法 id / 资源不存在时跳过
@@ -52,7 +66,8 @@ public final class ViewKiller {
             if (v instanceof ViewGroup) {
                 ((ViewGroup) v).removeAllViews();
             }
-            MainHook.log(tag + " KILLED view: " + v.getClass().getName() + " id=" + safeName(v, res));
+            H.log(android.util.Log.INFO, MainHook.TAG,
+                    tag + " KILLED view: " + v.getClass().getName() + " id=" + safeName(v, res));
         }
         if (v instanceof ViewGroup) {
             ViewGroup g = (ViewGroup) v;
@@ -60,6 +75,19 @@ public final class ViewKiller {
                 sweep(g.getChildAt(i), res);
             }
         }
+    }
+
+    /** "广告"角标命中后上溯到列表项容器：第一个 高度>=96px 且 ≥3倍角标 的祖先，最多 5 层 */
+    private static View bubbleToAdContainer(View label) {
+        int lh = Math.max(label.getHeight(), 1);
+        View cur = label;
+        for (int i = 0; i < 5; i++) {
+            ViewParent p = cur.getParent();
+            if (!(p instanceof View)) break;
+            cur = (View) p;
+            if (cur.getHeight() >= 96 && cur.getHeight() >= 3 * lh) return cur;
+        }
+        return label;
     }
 
     private static String safeName(View v, Resources res) {

@@ -1,26 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="io.github.ldxm666.mapadkiller"
-    android:versionCode="2"
-    android:versionName="1.0.1">
+    android:versionCode="3"
+    android:versionName="1.0.2">
 
     <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="34" />
 
     <application
         android:label="MapAdKiller"
         android:description="@string/description"
-        android:icon="@drawable/ic_launcher">
-        <meta-data
-            android:name="xposedmodule"
-            android:value="true" />
-        <meta-data
-            android:name="xposedminversion"
-            android:value="93" />
-        <meta-data
-            android:name="xposeddescription"
-            android:value="去广告: 高德/百度/腾讯地图 (splash/banner/feed/GDT/BQT)" />
-        <meta-data
-            android:name="xposedscope"
-            android:resource="@array/scope" />
-    </application>
+        android:icon="@drawable/ic_launcher" />
 </manifest>

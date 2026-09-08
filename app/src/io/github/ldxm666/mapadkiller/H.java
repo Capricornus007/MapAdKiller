@@ -1,105 +1,148 @@
 package io.github.ldxm666.mapadkiller;
 
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
-import de.robv.android.xposed.XposedHelpers;
+import android.util.Log;
 
-import java.lang.reflect.Member;
-import java.util.ArrayList;
-import java.util.List;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
-/** 通用挂钩工具：计数 + 容错。只用真实存在的 API（不依赖 XC_MethodReplacement 之外的助手）。 */
+import io.github.libxposed.api.XposedInterface;
+import io.github.libxposed.api.XposedModule;
+
+/**
+ * API 102 通用挂钩工具：按名/按签名 hook、计数、容错、常用语义 Hooker。
+ * 全部基于 io.github.libxposed.api（HookBuilder/Chain/Hooker），无 legacy 依赖。
+ */
 public final class H {
+
+    public static volatile XposedModule module;
 
     public static final AtomicInteger ok = new AtomicInteger();
     public static final AtomicInteger fail = new AtomicInteger();
+    private static final Set<String> installedPkgs = new HashSet<>();
 
     private H() {}
 
-    /** 吞掉方法：before 里 setResult(null)（void 方法安全；boolean 请用 RETURNS_FALSE） */
-    public static final XC_MethodHook VOID = new XC_MethodHook() {
-        @Override
-        protected void beforeHookedMethod(MethodHookParam param) {
-            param.setResult(null);
-        }
-    };
+    public static synchronized boolean markInstalled(String pkg) {
+        return installedPkgs.add(pkg);
+    }
 
-    public static final XC_MethodHook RETURNS_FALSE = new XC_MethodHook() {
-        @Override
-        protected void beforeHookedMethod(MethodHookParam param) {
-            param.setResult(Boolean.FALSE);
-        }
-    };
+    public static void log(int priority, String tag, String msg) {
+        XposedModule m = module;
+        if (m != null) m.log(priority, tag, msg);
+    }
 
-    public static final XC_MethodHook RETURNS_NULL = new XC_MethodHook() {
-        @Override
-        protected void beforeHookedMethod(MethodHookParam param) {
-            param.setResult(null);
-        }
+    public static void log(int priority, String tag, String msg, Throwable t) {
+        XposedModule m = module;
+        if (m != null) m.log(priority, tag, msg, t);
+    }
+
+    public static void log(String msg) {
+        log(Log.INFO, MainHook.TAG, msg);
+    }
+
+    /** 常用语义 Hooker（匿名类实现，避免 javac -bootclasspath android.jar 下 lambda 无法 desugar） */
+    public static final XposedInterface.Hooker VOID = new XposedInterface.Hooker() {
+        @Override public Object hook(XposedInterface.Chain chain) { return null; }
+    };
+    public static final XposedInterface.Hooker FALSE = new XposedInterface.Hooker() {
+        @Override public Object hook(XposedInterface.Chain chain) { return Boolean.FALSE; }
+    };
+    public static final XposedInterface.Hooker TRUE = new XposedInterface.Hooker() {
+        @Override public Object hook(XposedInterface.Chain chain) { return Boolean.TRUE; }
     };
 
     public static Class<?> cls(ClassLoader cl, String name) {
-        try {
-            return XposedHelpers.findClass(name, cl);
-        } catch (Throwable t) {
-            return null;
-        }
+        try { return cl.loadClass(name); } catch (Throwable t) { return null; }
     }
 
-    /** hook 指定签名方法；params 为空时按名 hook 全部重载 */
-    public static void hook(Class<?> c, String method, XC_MethodHook cb, Object... params) {
+    /** 按名 hook：本类 + 全部父类中同名方法（等价旧 hookAllMethods），返回命中数 */
+    public static int hookAll(Class<?> c, String method, String id, XposedInterface.Hooker hooker) {
+        if (c == null) return 0;
+        int n = 0;
+        for (Class<?> k = c; k != null && k != Object.class; k = k.getSuperclass()) {
+            for (Method m : k.getDeclaredMethods()) {
+                if (!m.getName().equals(method)) continue;
+                if (hookMethod(m, id + "#" + k.getSimpleName() + "#" + n, hooker)) n++;
+            }
+        }
+        count(n > 0, c, method + (n > 0 ? "*(" + n + ")" : " MISS"));
+        return n;
+    }
+
+    /** 按精确签名 hook */
+    public static void hookSig(Class<?> c, String method, String id, XposedInterface.Hooker hooker, Class<?>... params) {
         if (c == null) return;
         try {
-            if (params.length == 0) {
-                XposedBridge.hookAllMethods(c, method, cb);
-                count(true, c, method + "*");
-                return;
-            }
-            List<Object> va = new ArrayList<>();
-            for (Object p : params) {
-                if (p instanceof Class || p instanceof String) va.add(p);
-                else if (p == null) { count(false, c, method + " (null param)"); return; }
-                else va.add(p.getClass());
-            }
-            va.add(cb);
-            XposedHelpers.findAndHookMethod(c, method, va.toArray());
-            count(true, c, method);
+            Method m = c.getDeclaredMethod(method, params);
+            boolean r = hookMethod(m, id, hooker);
+            count(r, c, method + (r ? "" : " MISS(sig)"));
+        } catch (NoSuchMethodException e) {
+            count(false, c, method + " (no such sig)");
         } catch (Throwable t) {
             count(false, c, method + " (" + t.getMessage() + ")");
         }
     }
 
-    /** 按名字 hook 类中所有该方法名 */
-    public static void hookByName(Class<?> c, String method, XC_MethodHook cb) {
-        if (c == null) return;
+    private static boolean hookMethod(Method m, String id, XposedInterface.Hooker hooker) {
         try {
-            XposedBridge.hookAllMethods(c, method, cb);
-            count(true, c, method + "*");
+            m.setAccessible(true);
+            XposedModule mod = module;
+            if (mod == null) return false;
+            mod.hook(m)
+               .setId(id)
+               .setExceptionMode(XposedInterface.ExceptionMode.DEFAULT)
+               .intercept(hooker);
+            return true;
         } catch (Throwable t) {
-            count(false, c, method + "* (" + t.getMessage() + ")");
+            log(Log.WARN, MainHook.TAG, "event=hook_error method=" + m + " err=" + t);
+            return false;
         }
-    }
-
-    public static void swallow(Class<?> c, String method, Object... params) {
-        hook(c, method, VOID, params);
-    }
-
-    public static void returnsFalse(Class<?> c, String method, Object... params) {
-        hook(c, method, RETURNS_FALSE, params);
-    }
-
-    public static void returnsNull(Class<?> c, String method, Object... params) {
-        hook(c, method, RETURNS_NULL, params);
     }
 
     private static void count(boolean success, Class<?> c, String m) {
         if (success) {
             ok.incrementAndGet();
-            MainHook.log("HOOKED  " + c.getName() + "." + m);
+            log(Log.INFO, MainHook.TAG, "HOOKED  " + c.getName() + "." + m);
         } else {
             fail.incrementAndGet();
-            MainHook.log("miss    " + (c == null ? "?" : c.getName()) + "." + m);
+            log(Log.WARN, MainHook.TAG, "miss    " + (c == null ? "?" : c.getName()) + "." + m);
         }
+    }
+
+    /** 反射设置实例 int 字段（含父类查找） */
+    public static boolean setIntField(Object obj, String name, int value) {
+        try {
+            Class<?> k = obj.getClass();
+            while (k != null) {
+                try {
+                    Field f = k.getDeclaredField(name);
+                    f.setAccessible(true);
+                    f.setInt(obj, value);
+                    return true;
+                } catch (NoSuchFieldException e) { k = k.getSuperclass(); }
+            }
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+    public static Object getObjectField(Object obj, String name) {
+        try {
+            Class<?> k = obj.getClass();
+            while (k != null) {
+                try {
+                    Field f = k.getDeclaredField(name);
+                    f.setAccessible(true);
+                    return f.get(obj);
+                } catch (NoSuchFieldException e) { k = k.getSuperclass(); }
+            }
+        } catch (Throwable ignored) {}
+        return null;
+    }
+
+    public static void done(String pkg) {
+        log(Log.INFO, MainHook.TAG, "event=install_done pkg=" + pkg + " ok=" + ok.get() + " miss=" + fail.get());
     }
 }

@@ -1,4 +1,5 @@
-# MapAdKiller module build (offline toolchain) - ASCII-safe temp build
+# MapAdKiller module build (offline toolchain, libxposed API 102)
+# ASCII-safe temp build; packages META-INF/xposed/* to APK root (java resources)
 $ErrorActionPreference = "Stop"
 $Sdk  = "C:\Users\Administrator\AppData\Local\Android\Sdk"
 $Bt   = "$Sdk\build-tools\35.0.0"
@@ -12,11 +13,11 @@ $btamp = Get-Date -Format "HHmmss"
 $src = "C:\Users\Administrator\AppData\Local\Temp\makb$btamp"
 if (Test-Path $src) { Remove-Item $src -Recurse -Force }
 New-Item -ItemType Directory -Force -Path "$src\build\stubs","$src\build\classes","$src\build\dex","$src\build\out" | Out-Null
-Copy-Item "$Ws\module\stub-src","$Ws\module\src","$Ws\module\res","$Ws\module\assets" -Destination $src -Recurse -Force
+Copy-Item "$Ws\module\stub-src","$Ws\module\src","$Ws\module\res","$Ws\module\META-INF" -Destination $src -Recurse -Force
 Copy-Item "$Ws\module\AndroidManifest.xml" $src
 if (-not (Test-Path "$src\AndroidManifest.xml")) { throw "copy failed" }
 
-Write-Host "[1/6] compile xposed-api stubs (compile-only)"
+Write-Host "[1/6] compile libxposed-api stubs (compile-only)"
 & $Javac -encoding UTF-8 -nowarn -source 8 -target 8 -bootclasspath $Aj -d "$src\build\stubs" (Get-ChildItem "$src\stub-src" -Recurse -Filter *.java | % FullName) 2>&1 | Select-Object -Last 5
 if ($LASTEXITCODE -ne 0) { throw "stub compile failed" }
 
@@ -30,23 +31,23 @@ cmd /c "`"$Bt\d8.bat`" --min-api 21 --lib `"$Aj`" --output `"$src\build\dex`" `"
 Get-Content "$src\build\d8.log" -ErrorAction SilentlyContinue | Select-Object -Last 20
 if (-not (Test-Path "$src\build\dex\classes.dex")) { throw "d8 failed" }
 
-Write-Host "[4/6] aapt2 compile+link + 7z add dex/assets"
+Write-Host "[4/6] aapt2 compile+link + 7z add dex/META-INF"
 & "$Bt\aapt2.exe" compile --dir "$src\res" -o "$src\build\res.zip" > "$src\build\aapt2c.log" 2>&1
 if (-not (Test-Path "$src\build\res.zip")) { throw "aapt2 compile failed" }
 & "$Bt\aapt2.exe" link -o "$src\build\out\module.apk" --manifest "$src\AndroidManifest.xml" -I $Aj --min-sdk-version 21 --target-sdk-version 34 "$src\build\res.zip" > "$src\build\aapt2l.log" 2>&1
 if (-not (Test-Path "$src\build\out\module.apk")) { Get-Content "$src\build\aapt2l.log"; throw "aapt2 link failed" }
 Copy-Item "$src\build\dex\classes.dex" "$src\build\out\classes.dex"
-Copy-Item "$src\assets" "$src\build\out\assets" -Recurse -Force
+Copy-Item "$src\META-INF" "$src\build\out\META-INF" -Recurse -Force
 Push-Location "$src\build\out"
 $seven = @("D:\7-Zip\7z.exe","C:\Program Files\7-Zip\7z.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
 if ($seven) {
-    & $seven a -tzip module.apk classes.dex assets | Select-Object -Last 3
+    & $seven a -tzip module.apk classes.dex META-INF | Select-Object -Last 3
 } else {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $zip = [System.IO.Compression.ZipFile]::Open("$src\build\out\module.apk", "Update")
     [System.IO.Compression.ZipFileExtensions]::CreateFromFilePath($zip, "$src\build\out\classes.dex", "classes.dex") | Out-Null
-    Get-ChildItem "$src\build\out\assets" -Recurse -File | ForEach-Object {
-        $rel = "assets/" + $_.FullName.Substring("$src\build\out\assets".Length+1).Replace("\","/")
+    Get-ChildItem "$src\build\out\META-INF" -Recurse -File | ForEach-Object {
+        $rel = $_.FullName.Substring("$src\build\out".Length+1).Replace("\","/")
         [System.IO.Compression.ZipFileExtensions]::CreateFromFilePath($zip, $_.FullName, $rel) | Out-Null
     }
     $zip.Dispose()
@@ -56,7 +57,6 @@ if (-not (Test-Path "$src\build\out\module.apk")) { throw "7z add failed" }
 
 Write-Host "[5/6] zipalign + sign v1+v2+v3"
 & "$Bt\zipalign.exe" -f 4 "$src\build\out\module.apk" "$src\build\out\module-aligned.apk"
-if ($LASTEXITCODE -ne 0) { Write-Host "zipalign native failed, using java path" }
 if (-not (Test-Path "$src\build\out\module-aligned.apk")) { Copy-Item "$src\build\out\module.apk" "$src\build\out\module-aligned.apk" }
 $ks = "$Ws\module\debug.keystore"
 if (-not (Test-Path $ks)) {

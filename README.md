@@ -9,7 +9,7 @@
 
 ## 中文
 
-一个纯本地运行的 LSPosed 模块，针对国内三大地图 App 的**开屏广告、首页运营横幅、信息流广告卡、第三方广告 SDK** 做确定性拦截。所有 hook 点均来自对目标 APK 的静态逆向分析（jadx / apktool / androguard），证据表见 [docs/ANALYSIS.md](docs/ANALYSIS.md)。
+一个纯本地运行的 LSPosed 模块（libxposed **API 102**：`XposedModule` 入口 + `META-INF/xposed` 元数据，无 legacy de.robv 依赖），针对国内三大地图 App 的**开屏广告、首页运营横幅、信息流广告卡、第三方广告 SDK** 做确定性拦截。所有 hook 点均来自对目标 APK 的静态逆向分析（jadx / apktool / androguard），证据表见 [docs/ANALYSIS.md](docs/ANALYSIS.md)。
 
 ### 功能一览
 
@@ -23,9 +23,9 @@
 
 ### 安装
 
-1. 需要 root + LSPosed（本模块在 KernelSU + ZygiskNext + LSPosed v2.1.1 / Android 16 实测通过）
+1. 需要 root + LSPosed（libxposed API 102；实测 KernelSU + ZygiskNext + LSPosed v2.1.1 / Android 16）
 2. 安装 `MapAdKiller.apk`
-3. 在 LSPosed Manager 中启用本模块，勾选作用域：**高德地图、百度地图、腾讯地图**（模块 manifest 已声明 `xposedscope`，LSPosed 安装时会自动预选）
+3. 在 LSPosed Manager 中启用本模块（`staticScope=true` 固定作用域：高德/百度/腾讯，见 `app/META-INF/xposed/scope.list`）
 4. 重启目标 App 生效（无需重启手机）
 
 ### 构建（无需 Android Studio / Gradle）
