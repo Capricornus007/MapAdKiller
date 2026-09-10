@@ -4,6 +4,7 @@ import android.util.Log;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -45,13 +46,13 @@ public final class H {
 
     /** 常用语义 Hooker（匿名类实现，避免 javac -bootclasspath android.jar 下 lambda 无法 desugar） */
     public static final XposedInterface.Hooker VOID = new XposedInterface.Hooker() {
-        @Override public Object hook(XposedInterface.Chain chain) { return null; }
+        @Override public Object intercept(XposedInterface.Chain chain) { return null; }
     };
     public static final XposedInterface.Hooker FALSE = new XposedInterface.Hooker() {
-        @Override public Object hook(XposedInterface.Chain chain) { return Boolean.FALSE; }
+        @Override public Object intercept(XposedInterface.Chain chain) { return Boolean.FALSE; }
     };
     public static final XposedInterface.Hooker TRUE = new XposedInterface.Hooker() {
-        @Override public Object hook(XposedInterface.Chain chain) { return Boolean.TRUE; }
+        @Override public Object intercept(XposedInterface.Chain chain) { return Boolean.TRUE; }
     };
 
     public static Class<?> cls(ClassLoader cl, String name) {
@@ -65,6 +66,7 @@ public final class H {
         for (Class<?> k = c; k != null && k != Object.class; k = k.getSuperclass()) {
             for (Method m : k.getDeclaredMethods()) {
                 if (!m.getName().equals(method)) continue;
+                if (Modifier.isAbstract(m.getModifiers())) continue; // 抽象方法不可 hook，跳过避免 hook_error 刷屏
                 if (hookMethod(m, id + "#" + k.getSimpleName() + "#" + n, hooker)) n++;
             }
         }
@@ -91,10 +93,22 @@ public final class H {
             m.setAccessible(true);
             XposedModule mod = module;
             if (mod == null) return false;
+            final XposedInterface.Hooker inner = hooker;
+            final String hid = id;
+            // 首火日志包装：每个 Hook 首次触发记一条 HIT，便于诊断"装了没触发"类问题
             mod.hook(m)
                .setId(id)
                .setExceptionMode(XposedInterface.ExceptionMode.DEFAULT)
-               .intercept(hooker);
+               .intercept(new XposedInterface.Hooker() {
+                   private boolean hitLogged = false;
+                   @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+                       if (!hitLogged) {
+                           hitLogged = true;
+                           log(Log.INFO, MainHook.TAG, "HIT " + hid);
+                       }
+                       return inner.intercept(chain);
+                   }
+               });
             return true;
         } catch (Throwable t) {
             log(Log.WARN, MainHook.TAG, "event=hook_error method=" + m + " err=" + t);

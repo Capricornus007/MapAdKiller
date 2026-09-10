@@ -22,7 +22,7 @@ public final class AmapHooks {
             Class<?> gate = H.cls(cl, gateCls);
             if (gate == null) continue;
             H.hookSig(gate, "g", "amap_gate_" + gateCls, new io.github.libxposed.api.XposedInterface.Hooker() {
-                @Override public Object hook(io.github.libxposed.api.XposedInterface.Chain chain) throws Throwable {
+                @Override public Object intercept(io.github.libxposed.api.XposedInterface.Chain chain) throws Throwable {
                     Object r = chain.proceed();
                     if (r != null && H.setIntField(r, "a", 1)) {
                         H.log(Log.INFO, MainHook.TAG, "AMAP splash forced NO_SPLASH");

@@ -47,7 +47,7 @@ public final class MainHook extends XposedModule {
                 hook(sc.getDeclaredMethod("amEnabled"))
                         .setId("self_check")
                         .intercept(new io.github.libxposed.api.XposedInterface.Hooker() {
-                            @Override public Object hook(io.github.libxposed.api.XposedInterface.Chain chain) {
+                            @Override public Object intercept(io.github.libxposed.api.XposedInterface.Chain chain) {
                                 return Boolean.TRUE;
                             }
                         });

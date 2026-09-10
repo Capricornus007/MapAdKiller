@@ -19,7 +19,7 @@ public final class Sweeper {
               .setId("sweep_activity")
               .setExceptionMode(io.github.libxposed.api.XposedInterface.ExceptionMode.DEFAULT)
               .intercept(new io.github.libxposed.api.XposedInterface.Hooker() {
-                  @Override public Object hook(io.github.libxposed.api.XposedInterface.Chain chain) throws Throwable {
+                  @Override public Object intercept(io.github.libxposed.api.XposedInterface.Chain chain) throws Throwable {
                       Object r = chain.proceed();
                       final Activity act = (Activity) chain.getThisObject();
                       Handler h = new Handler(Looper.getMainLooper());

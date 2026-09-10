@@ -1,84 +1,63 @@
 package io.github.ldxm666.mapadkiller;
 
-import android.app.Activity;
 import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
-import android.view.ViewParent;
+import android.widget.TextView;
+
+import io.github.libxposed.api.XposedInterface;
 
 /**
- * 百度地图 com.baidu.BaiduMap（21.18 与 21.20.30 双版本验证）
- *  - 开屏闸门: WelcomeScreen.t()/HomeSplashPresenter 以 F()&&z() 决定是否等待 → 强制 false
- *  - 加载链: G/H/n/m(Context,ii.a) → SplashAdProvider.k/m → 6 家 ADN Loader.I
- *  - 卡屏根治: HomeSplashPresenter.n() 会 addContentView 全屏品牌遮罩(splash_layers)，
- *    广告流程被吞后其完成事件永不到达 → n() 返回后立即摘除遮罩（含 300ms 补刀）
- *  - 中部横幅: HomeMidBannerPresenter.show/onCreateView + MidBannerRepo.c/onEvent
- *  - 悬浮黄条: YellowBannerPresenter try/show/showSwitcher/showViewSwitcher/showYbBannerAnim/onResumeForYB
- *  - BMAd*Provider + IBMapAdLoader c/d/x（三方广告开放封装）
+ * 百度地图 com.baidu.BaiduMap（21.18 ~ 21.20.50 适配）
+ *
+ * 21.20.50（versionCode 1645）实测链路（smali + 真机日志证据）：
+ *  - SplashAdManager Kotlin 化重写，F()/z()/G()/H() 仍在，但自营运营开屏
+ *    （fetchBizSplashAd，如淘宝闪购）不再经过 F/z 闸门，数据层拦截对其失效；
+ *  - 缓存广告直接 addView 进 SplashViewContainer（FrameLayout）展示，
+ *    吞调用/拦加载会造成开屏完成事件永不到达 → 卡开屏（21.20.30 真机复现）；
+ *  - v1.0.2 的 SplashViewContainer"onAttachedToWindow"Hook 实际命中的是父类
+ *    android.view.View 的同名方法（该类在 21.20.50 已不覆写此方法），
+ *    等于 Hook 全局所有 View 的 attach → 白屏元凶。
+ *
+ *  v1.0.3 方案：
+ *  1) 数据层保留 F/z 布尔闸门 + ADN Loader.I + BMAd 拦截（不吞 G/H/n/m、k/m，
+ *     避免开屏必经路径被断）；
+ *  2) 视图层 hook SplashViewContainer.addView：新增子树命中已知 AD SDK 特征
+ *     或「跳过」按钮 → 整个子树 GONE。广告倒计时由 Handler 驱动照常走完，
+ *     onAdFinish/onSkip 正常回调 → 不白屏、不卡开屏，广告零曝光。
  */
 public final class BmapHooks {
 
     private static final String P = "com.baidu.baidumaps.";
+    private static volatile boolean sPassthroughLogged = false;
 
     private BmapHooks() {}
 
     public static void install(ClassLoader cl) {
-        // ---- 开屏闸门（注意：不能吞 L/BMapAdEngine.i/m —— 品牌开屏完成事件也走它们，会卡到超时）----
+        // ---- 开屏闸门：仅 F/z 布尔闸（对仍有闸门的版本生效，21.20.50 自营链路已绕开）----
         Class<?> mgr = H.cls(cl, P + "splash.SplashAdManager");
         H.hookAll(mgr, "F", "bmap_gate_F", H.FALSE);
         H.hookAll(mgr, "z", "bmap_gate_z", H.FALSE);
-        H.hookAll(mgr, "G", "bmap_G", H.VOID);
-        H.hookAll(mgr, "H", "bmap_H", H.VOID);
-        H.hookAll(mgr, "n", "bmap_n", H.VOID);
-        H.hookAll(mgr, "m", "bmap_m", H.VOID);
 
-        Class<?> provider = H.cls(cl, P + "commonadprovider.SplashAdProvider");
-        H.hookAll(provider, "k", "bmap_prov_k", H.VOID);
-        H.hookAll(provider, "m", "bmap_prov_m", H.VOID);
-
-        // ---- 品牌开屏遮罩摘除（v1.0.2 卡屏修复核心）----
-        Class<?> hsp = H.cls(cl, P + "operation.splash.HomeSplashPresenter");
-        H.hookSig(hsp, "n", "bmap_rip_overlay", new io.github.libxposed.api.XposedInterface.Hooker() {
-            @Override public Object hook(io.github.libxposed.api.XposedInterface.Chain chain) throws Throwable {
-                Object r = chain.proceed();
-                final Object thiz = chain.getThisObject();
-                ripOverlay(thiz);
-                try {
-                    Object act = H.getObjectField(thiz, "z");
-                    if (act instanceof Activity) {
-                        ((Activity) act).getWindow().getDecorView().postDelayed(new Runnable() {
-                            @Override public void run() { ripOverlay(thiz); }
-                        }, 300);
-                    }
-                } catch (Throwable ignored) {}
-                return r;
-            }
-        }, String.class, boolean.class, String.class);
-
-        // ---- 开屏广告容器釜底抽薪（真机验证：缓存广告经 SplashViewContainer 直接 addContentView 展示，
-        //      绕过 SplashAdManager.G/n 加载闸）----
-        // 任何路径 attach 即摘除，覆盖 brand + 淘宝闪购等 SDK 广告。
+        // ---- 开屏 SDK 广告隐藏（addView 探测，见类注释）----
         Class<?> svc = H.cls(cl, P + "splash.view.SplashViewContainer");
-        H.hookAll(svc, "onAttachedToWindow", "bmap_splashview_kill", new io.github.libxposed.api.XposedInterface.Hooker() {
-            @Override public Object hook(io.github.libxposed.api.XposedInterface.Chain chain) throws Throwable {
+        H.hookSig(svc, "addView", "bmap_svc_probe", new XposedInterface.Hooker() {
+            @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
                 Object r = chain.proceed();
-                final View v = (View) chain.getThisObject();
-                v.post(new Runnable() {
-                    @Override public void run() {
-                        try {
-                            ViewParent p = v.getParent();
-                            if (p instanceof ViewGroup) {
-                                ((ViewGroup) p).removeView(v);
-                                H.log(Log.INFO, MainHook.TAG, "BMAP SplashViewContainer removed");
-                            }
-                        } catch (Throwable ignored) {}
-                    }
-                });
+                final View child = (View) chain.getArg(0);
+                if (child != null) {
+                    child.post(new Runnable() {
+                        @Override public void run() { probeAndHide(child, 120); }
+                    });
+                    child.postDelayed(new Runnable() {
+                        @Override public void run() { probeAndHide(child, 1000); }
+                    }, 1000);
+                }
                 return r;
             }
-        });
+        }, View.class, int.class, ViewGroup.LayoutParams.class);
 
-        // ---- 各 ADN Loader 加载入口 I ----
+        // ---- 各 ADN Loader 加载入口 I（三方 SDK 广告数据层拦截）----
         String[] loaders = {
             P + "commonadprovider.api.IAdLoader",
             P + "commonadprovider.business.BusinessAdLoader",
@@ -110,15 +89,14 @@ public final class BmapHooks {
             H.hookAll(c, "x", "bmap_" + s + "_x", H.VOID);
         }
 
-        // ---- 首页中部横幅 ----
+        // ---- 首页中部横幅（onCreateView 返回 View，VOID 会产生 null，仅拦 show）----
         Class<?> presenter = H.cls(cl, P + "aihome.panel.presenter.HomeMidBannerPresenter");
         H.hookAll(presenter, "show", "bmap_mid_show", H.VOID);
-        H.hookAll(presenter, "onCreateView", "bmap_mid_create", H.VOID);
         Class<?> repo = H.cls(cl, P + "base.yellowbanner.MidBannerRepo");
         H.hookAll(repo, "c", "bmap_repo_c", H.VOID);
         H.hookAll(repo, "onEvent", "bmap_repo_evt", H.VOID);
 
-        // ---- 悬浮运营黄条（21.20 私有 showViewSwitcher/showYbBannerAnim）----
+        // ---- 悬浮运营黄条 ----
         Class<?> yb = H.cls(cl, P + "aihome.map.presenter.YellowBannerPresenter");
         H.hookAll(yb, "tryShowYellowBanner", "bmap_yb_try", H.VOID);
         H.hookAll(yb, "showYellowBanner", "bmap_yb_show", H.VOID);
@@ -127,29 +105,83 @@ public final class BmapHooks {
         H.hookAll(yb, "showYbBannerAnim", "bmap_yb_anim", H.VOID);
         H.hookAll(yb, "onResumeForYB", "bmap_yb_res", H.VOID);
 
-        // ---- 视图兜底 ----
+        // ---- 视图兜底（仅杀专属广告视图；SplashViewContainer 由 addView 探测处理）----
         Sweeper.install(new ViewKiller("BMAP-KILL",
                 "^(com\\.baidu\\.baidumaps\\.integratedads\\.view\\.BannerAdView|" +
-                "com\\.baidu\\.baidumaps\\.integratedads\\.gromore\\.view\\.BannerUIView|" +
-                "com\\.baidu\\.baidumaps\\.splash\\.view\\.SplashViewContainer)$",
+                "com\\.baidu\\.baidumaps\\.integratedads\\.gromore\\.view\\.BannerUIView)$",
                 ":id/(banner_ad|ad_banner|splash_ad_view|mid_banner_container|home_ad_view)$"));
 
         H.done(MainHook.PKG_BMAP);
     }
 
-    private static void ripOverlay(Object thiz) {
+    /** 探测 + 隐藏：命中 AD SDK 特征则对整棵新增子树 GONE，否则放行（品牌层不动） */
+    private static void probeAndHide(View root, long atMs) {
         try {
-            Object e = H.getObjectField(thiz, "E");
-            if (e instanceof View) {
-                View v = (View) e;
-                ViewParent parent = v.getParent();
-                if (parent instanceof ViewGroup) {
-                    ((ViewGroup) parent).removeView(v);
-                    H.log(Log.INFO, MainHook.TAG, "BMAP brand splash overlay removed");
-                }
+            if (root.getVisibility() == View.GONE) return;
+            AdProbe.Result res = AdProbe.scan(root);
+            if (res.hit != null) {
+                root.setVisibility(View.GONE);
+                H.log(Log.INFO, MainHook.TAG,
+                        "BMAP splash ad hidden t=" + atMs + "ms hit=" + res.hit
+                                + " root=" + root.getClass().getName()
+                                + " tree=" + res.tree);
+            } else if (!sPassthroughLogged) {
+                sPassthroughLogged = true;
+                H.log(Log.INFO, MainHook.TAG,
+                        "BMAP splash addview passthrough root=" + root.getClass().getName()
+                                + " tree=" + res.tree);
             }
         } catch (Throwable t) {
-            H.log(Log.WARN, MainHook.TAG, "BMAP overlay rip err " + t);
+            H.log(Log.WARN, MainHook.TAG, "BMAP probe err " + t);
+        }
+    }
+
+    /** 已知 AD SDK 类名特征（21.20.50 实测打包：qq.e / bytedance openadsdk / sigmob / kwai） */
+    private static final class AdProbe {
+        private static final String[] TOKENS = {
+            "qq.e.", "openadsdk", "bytedance", "pangle", "sigmob", "kwai",
+            "mintegral", "gdt", "mobads", "octopus", "gromore",
+            "adview", "splashad", "ttadview",
+        };
+
+        private static final class Result {
+            final String hit;
+            final String tree;
+            Result(String hit, String tree) { this.hit = hit; this.tree = tree; }
+        }
+
+        static Result scan(View root) {
+            StringBuilder tree = new StringBuilder();
+            String[] hit = new String[1];
+            walk(root, tree, hit, 0);
+            return new Result(hit[0], tree.toString());
+        }
+
+        private static boolean walk(View v, StringBuilder tree, String[] hit, int depth) {
+            if (v == null || depth > 24 || tree.length() > 4000) return hit[0] != null;
+            String cn = v.getClass().getName();
+            if (tree.length() < 3000) tree.append(cn).append(' ');
+            String low = cn.toLowerCase();
+            for (String t : TOKENS) {
+                if (low.contains(t)) { hit[0] = t + ":" + cn; return true; }
+            }
+            if (v instanceof TextView) {
+                TextView tv = (TextView) v;
+                CharSequence tx = tv.getText();
+                CharSequence cd = tv.getContentDescription();
+                if ((tx != null && tx.toString().contains("跳过"))
+                        || (cd != null && cd.toString().contains("跳过"))) {
+                    hit[0] = "skip-btn:" + cn;
+                    return true;
+                }
+            }
+            if (v instanceof ViewGroup) {
+                ViewGroup g = (ViewGroup) v;
+                for (int i = 0; i < g.getChildCount(); i++) {
+                    if (walk(g.getChildAt(i), tree, hit, depth + 1)) return true;
+                }
+            }
+            return false;
         }
     }
 }

@@ -29,7 +29,7 @@ public interface XposedInterface {
     }
 
     interface Hooker {
-        Object hook(Chain chain) throws Throwable;
+        Object intercept(Chain chain) throws Throwable;
     }
 
     interface Chain {
