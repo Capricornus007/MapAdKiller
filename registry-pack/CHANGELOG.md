@@ -1,5 +1,85 @@
 # Changelog
 
+## v1.0.6 (2026-09-13)
+
+### 新增：广告 SDK 自动检索 + 学习 + 持久化
+
+不再只靠内置的厂商前缀表 —— 内置表永远只能找到**已经写进去的**厂商。现在：
+
+- **自动发现**：扫描目标 App **自身 APK 里的 dex 字符串表**（纯 Java 解析 string_ids，
+  只读短字符串、不遍历全文件，无 DexKit / 无 native 依赖），既匹配内置前缀，
+  也按**广告特征词**找出可疑类，再从类名反推厂商根包名；
+- **安全闸门**（重要）：广告特征词必须落在**类名前 4 段命名空间**内 + 基础设施根黑名单。
+  否则会误学 —— 实测高德曾被学出 `com.alipay` / `com.google` / `com.huawei` /
+  `com.taobao` / `com.alibaba` 等 15 个**非广告**包，真拦下去会把登录、支付、地图本体一起打死；
+- **持久化**：hook 侧拿到的 RemotePreferences 是**只读实现**
+  （`UnsupportedOperationException: Read only implementation`），
+  且超时/广播跨进程唤起在 HyperOS 上会被拦 → 改用 **ContentProvider** 通道
+  （`ContentResolver.call()` 按需唤起设置 App 进程）把学到的东西交给 App 侧落盘，
+  并加了一层本地 prefs 暂存兜底；
+- **下次直接拦**：学到的厂商前缀跨进程保存，三家地图下次启动读到即生效。
+
+设置页新增「已捕获广告 SDK：N 个」一行，点开可看清单、可一键清空重新学习。
+
+### 修复：框架类被全局 hook 导致百度闪退 / 腾讯 ANR（严重）
+
+SDK 自动 hook 最初沿**父类链**往上走，从 SDK 类一路升到 `android.view.View` /
+`android.app.Dialog` / `android.content.ContextWrapper` 并挂上了钩子：
+
+```
+SDK BLOCK android.app.Dialog#show          ← 全局 Dialog 被拦
+SDK CTX   android.app.Activity#startActivityIfNeeded
+SDK CTX   android.content.ContextWrapper#startService
+→ ANR in com.tencent.map / 百度地图闪退
+```
+
+这与 v1.0.2 白屏事故同源，是本模块第一红线。已改为**只处理声明在 SDK 类自己身上**的
+方法，并加框架包硬闸门（`android.` / `java.` / `dalvik.` / `androidx.` / `kotlin` 一律不动）。
+实测三家 App `FATAL=0 / ANR=0`，框架类 hook 残留 0。
+
+### 修复：状态显示与实际不符
+
+原来用 `StatusCheck.amEnabled()` 自检 —— 它依赖"模块被注入自己的进程"，
+实测 LSPosed 不会这么做，于是**明明已激活却显示未激活**。
+改为两个可验证的真实信号，并配红/绿点：
+
+```
+● 已激活 · LSPosed 2.1.1                 （LSPosed 服务可达）
+● 作用域已勾选 · 高德 / 百度 / 腾讯（3/3） （向服务查询 getScope()）
+```
+
+### 修复：设置 App 启动即崩
+
+```
+NoClassDefFoundError: io.github.libxposed.api.XposedInterface$Hooker
+  at Config.prefs → SdkAutoBlock.loadLearned → MainActivity.sdkSummary
+```
+
+`io.github.libxposed.api.*` 是**只编译不打包**的 stub，App 进程里没有这个包。
+已加 `hookSide` 闸门：App 侧一律不触碰 `H` / `Config.prefs()`。
+
+### 优化：百度开屏广告隐藏提速 3 倍
+
+原来只有等"跳过"文字出现才认得出广告，广告先亮 1 秒。补上实测命中的 token
+（`qumeng` / `advlib` / `splashcountdown`）并加 onPreDraw 探针：
+
+```
+旧: BMAP splash ad hidden t=1000ms hit=skip-btn:...SplashCountdownView
+新: BMAP splash ad hidden at=350ms hit=qumeng:com.qumeng.advlib...
+```
+
+### 优化：高德首页内容流
+
+信息流卡片改为挂列表适配器的 `onBindViewHolder`，在**绑定完成的同一帧内**判定并隐藏；
+并补挂 onPreDraw 复查 —— 新帖的文字往往在 `onBindViewHolder` 返回后才写入，
+只在绑定时刻判会漏。实测滚动过程中 100+ 次 `BIND-HIDE`，几何全为 `0x0`（从未被绘制）。
+
+### 其他
+
+- 品牌统一：设置页标题 MapAdKiller，分类标题标明作用域（`高德 · 首页工具宫格` 等）
+- 修复「已捕获广告 SDK」计数不刷新（`onCreate` 时的空快照 vs 点开时的实时值不一致）
+- 替换模块图标
+
 ## v1.0.5 (2026-09-11)
 
 ### 新增：高德首页 / 「我的」页 UI 自定义（并入原 AmapEnhancer 引擎）

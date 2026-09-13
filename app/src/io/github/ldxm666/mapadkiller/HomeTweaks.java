@@ -996,23 +996,55 @@ public final class HomeTweaks {
      * 条目刚绑定完：在这一个小子树里找我们登记过的锚点文本，
      * 命中「已关闭」的规则就立刻把整个 item 收掉。
      * 含工具格的 item 一律放过（那是"宫格整体消失"的老坑）。
+     *
+     * 两个坑都在这儿补掉：
+     *  1) 向下多翻几次冒出来的新帖，`onBindViewHolder` 返回时它的文字往往**还没写进去**
+     *     （AJX 先绑视图再灌属性）→ 当场判定会判成"放行"。所以额外挂一个
+     *     onPreDraw：每帧绘制前再判一次，文字一到就在**同一帧**被盖掉。
+     *  2) 帖子标题是用户自由文案（"受累已回，说点 xhs 上没有的实话"），
+     *     任何锚点词都匹配不到 → 靠**结构**兜底：半屏宽 + 高卡的 item 就是内容流帖子卡。
      */
-    private static void onItemBound(View item) {
+    private static void onItemBound(final View item) {
         if (hiddenWhy.containsKey(item)) return;
+        String rule = ruleForItem(item);
+        if (rule != null) { hideItem(item, rule); return; }
+        // 当场没判出来（文字还没到）→ 挂 preDraw 再判，最多 12 帧
+        try {
+            item.getViewTreeObserver().addOnPreDrawListener(
+                    new android.view.ViewTreeObserver.OnPreDrawListener() {
+                private int n;
+                @Override public boolean onPreDraw() {
+                    try {
+                        if (hiddenWhy.containsKey(item)) {
+                            item.getViewTreeObserver().removeOnPreDrawListener(this);
+                            return true;
+                        }
+                        String r = ruleForItem(item);
+                        if (r != null) {
+                            hideItem(item, r);
+                            item.getViewTreeObserver().removeOnPreDrawListener(this);
+                            return true;
+                        }
+                        if (++n > 12) item.getViewTreeObserver().removeOnPreDrawListener(this);
+                    } catch (Throwable ignored) {}
+                    return true;
+                }
+            });
+        } catch (Throwable ignored) {}
+    }
+
+    /** 判定一个 item 该不该收：先锚点文本，再不济按结构认「内容流帖子卡」 */
+    private static String ruleForItem(View item) {
         List<View> stack = new ArrayList<>();
         stack.add(item);
         String hitRule = null;
-        boolean hasTool = false;
         int guard = 0;
         while (!stack.isEmpty() && guard++ < 400) {
             View v = stack.remove(stack.size() - 1);
             String text;
             synchronized (LOCK) { text = anchors.get(v); }
             if (text != null) {
-                if (TOOL_ALIAS.containsKey(text)) {
-                    hasTool = true;
-                    break;
-                }
+                if (TOOL_ALIAS.containsKey(text)) return null;   // 工具格所在 item 绝不动
                 if (hitRule == null) {
                     String rule = ruleFor(text, v);
                     if (rule != null && !cfgOn(rule)) hitRule = rule;
@@ -1023,8 +1055,31 @@ public final class HomeTweaks {
                 for (int i = 0; i < g.getChildCount(); i++) stack.add(g.getChildAt(i));
             }
         }
-        if (hasTool || hitRule == null) return;
+        if (hitRule != null) return hitRule;
 
+        // —— 结构兜底：内容流帖子卡 ——
+        // 实测：双列布局，每张卡宽 ≈487~514（约屏幕宽的 45%），高 640~990。
+        // 天气卡 487x518、语音包 493x252 都够不着高度线。
+        // 注意：这里必须用**屏幕宽**，不能用 screenOf()（那个给的是根高度）。
+        if (!cfgOn(Config.K_FEED_CONTENT)) {
+            int w = item.getWidth(), h = item.getHeight();
+            if (w > 0 && h > 0) {
+                View root = item;
+                ViewParent p;
+                while ((p = root.getParent()) instanceof View) root = (View) p;
+                int sw = root.getWidth() > 0 ? root.getWidth() : 1080;
+                int sh = root.getHeight() > 0 ? root.getHeight() : 2400;
+                if (w >= sw * 40 / 100 && w <= sw * 52 / 100 && h >= sh * 25 / 100) {
+                    return Config.K_FEED_CONTENT + "#shape";
+                }
+            }
+        }
+        return null;
+    }
+
+    /** 真正把条目收掉 */
+    private static void hideItem(View item, String rule) {
+        if (hiddenWhy.containsKey(item)) return;
         if (item.getVisibility() != View.GONE) item.setVisibility(View.GONE);
         ViewGroup.LayoutParams lp = item.getLayoutParams();
         if (lp != null && lp.height != 0 && item.getHeight() > 0) {
@@ -1032,9 +1087,9 @@ public final class HomeTweaks {
             item.setLayoutParams(lp);
         }
         hiddenItems.add(new java.lang.ref.WeakReference<>(item));
-        hiddenWhy.put(item, hitRule);
+        hiddenWhy.put(item, rule);
         if (loggedOnce.add("bind_" + System.identityHashCode(item))) {
-            H.log(Log.INFO, MainHook.TAG, "BIND-HIDE " + hitRule + " " + geom(item));
+            H.log(Log.INFO, MainHook.TAG, "BIND-HIDE " + rule + " " + geom(item));
         }
     }
 

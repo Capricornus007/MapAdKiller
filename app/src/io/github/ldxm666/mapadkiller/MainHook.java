@@ -86,6 +86,8 @@ public final class MainHook extends XposedModule {
                 default:
                     break;
             }
+            // 三家通用层：广告 SDK 自动检索 + 拦截（已知入口立刻挂，dex 扫描后台跑）
+            SdkAutoBlock.install(cl, pkg);
         } catch (Throwable t) {
             H.log(Log.ERROR, TAG, "event=install_failed pkg=" + pkg, t);
         }

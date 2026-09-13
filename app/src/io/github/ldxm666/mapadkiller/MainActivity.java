@@ -24,6 +24,8 @@ public final class MainActivity extends Activity {
 
     private LinearLayout currentCard;
     private TextView statusView;
+    /** 「已捕获广告 SDK」那一行；服务绑定后要重刷文案，否则一直显示 onCreate 时的空快照 */
+    private TextView sdkRow;
 
     private static final int BG_PAGE = 0xFFF2F3F7;
     private static final int BG_CARD = 0xFFFFFFFF;
@@ -47,28 +49,36 @@ public final class MainActivity extends Activity {
         setContentView(scroll);
 
         // ---- 标题区 ----
-        TextView title = text("高德增强", 22, Typeface.BOLD, TX_PRIMARY);
+        TextView title = text("MapAdKiller", 22, Typeface.BOLD, TX_PRIMARY);
         title.setPadding(dp(4), dp(14), 0, dp(2));
         root.addView(title);
 
-        statusView = text(statusText(), 13, Typeface.NORMAL, TX_SECONDARY);
+        statusView = text("", 13, Typeface.NORMAL, TX_SECONDARY);
         statusView.setPadding(dp(4), 0, 0, dp(10));
         root.addView(statusView);
+        renderStatus();
 
         // ---- 去广告 ----
-        root.addView(sectionHeader("去广告"));
+        root.addView(sectionHeader("去广告 · 高德 / 百度 / 腾讯"));
         beginCard();
-        addNoteRow("开屏 / 横幅 / 推送 / 信息流广告拦截（始终开启，无需配置）");
+        addNoteRow("开屏 / 横幅 / 推送 / 信息流广告卡拦截，覆盖高德、百度、腾讯三家地图（始终开启，无需配置）");
+        addNoteRow("广告 SDK 自动检索：打开地图时模块会在其进程内扫描 dex，命中广告特征的厂商包"
+                + "会自动记下来并拦截，记录长期保存，下次启动直接生效。");
+        sdkRow = addActionButton(sdkSummary(), new Runnable() {
+            @Override public void run() {
+                showLearnedSdks();
+            }
+        });
         endCard(root);
 
         // ---- 主页标签栏 ----
-        root.addView(sectionHeader("主页标签栏"));
+        root.addView(sectionHeader("高德 · 主页标签栏"));
         beginCard();
         for (String tab : Config.TABS) addSwitch("显示标签「" + tab + "」", Config.K_TAB_PREFIX + tab);
         endCard(root);
 
         // ---- 首页工具 ----
-        root.addView(sectionHeader("首页工具宫格"));
+        root.addView(sectionHeader("高德 · 首页工具宫格"));
         beginCard();
         for (String tool : Config.TOOLS) addSwitch("显示「" + tool + "」", Config.K_TOOL_PREFIX + tool);
         addSwitch("显示扩展工具页（景点游玩 / 离线地图 / 通行费助手 / 收藏夹 / 旅游度假）",
@@ -76,7 +86,7 @@ public final class MainActivity extends Activity {
         endCard(root);
 
         // ---- 首页推荐内容 ----
-        root.addView(sectionHeader("首页推荐内容"));
+        root.addView(sectionHeader("高德 · 首页推荐内容"));
         beginCard();
         addSwitch("天气卡片", Config.K_FEED_WEATHER);
         addSwitch("周边景区 / 景点推荐", Config.K_FEED_SCENIC);
@@ -90,7 +100,7 @@ public final class MainActivity extends Activity {
         endCard(root);
 
         // ---- 「我的」页 ----
-        root.addView(sectionHeader("「我的」页"));
+        root.addView(sectionHeader("高德 · 「我的」页"));
         beginCard();
         addSwitch("订单 / 收藏 / 待评价 一栏", Config.K_MY_ORDER_ROW);
         addSwitch("车辆服务 / 高德运动 一栏", Config.K_MY_SERVICE_ROW);
@@ -107,7 +117,7 @@ public final class MainActivity extends Activity {
         addActionButton("恢复默认（全部显示）", new Runnable() {
             @Override public void run() {
                 if (App.clearAll()) {
-                    Toast.makeText(MainActivity.this, "已恢复默认，请强停高德地图生效", Toast.LENGTH_LONG).show();
+                    Toast.makeText(MainActivity.this, "已恢复默认，请强停地图 App 生效", Toast.LENGTH_LONG).show();
                     recreate();
                 } else {
                     Toast.makeText(MainActivity.this, "LSPosed 服务未连接，请稍后重试", Toast.LENGTH_SHORT).show();
@@ -116,7 +126,7 @@ public final class MainActivity extends Activity {
         });
         endCard(root);
 
-        TextView tip = text("改动后请强停高德地图并重新打开以生效", 12, Typeface.NORMAL, TX_SECONDARY);
+        TextView tip = text("改动后请强停对应地图 App 并重新打开以生效", 12, Typeface.NORMAL, TX_SECONDARY);
         tip.setPadding(dp(4), dp(14), 0, 0);
         root.addView(tip);
     }
@@ -125,6 +135,9 @@ public final class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         synced = false;          // 回到设置页时按存储重刷一遍开关
+        // 服务绑好之后，把收到上报时服务还没就绪而暂存的学习结果补推一次
+        try { LearnedProvider.flushToRemote(this); } catch (Throwable ignored) {}
+        refreshSdkRow();
         statusRefresher.run();
     }
 
@@ -134,12 +147,58 @@ public final class MainActivity extends Activity {
         statusHandler.removeCallbacks(statusRefresher);
     }
 
-    private String statusText() {
+    private static final int DOT_OK = 0xFF12B76A;    // 绿：正常
+    private static final int DOT_BAD = 0xFFE5484D;   // 红：未生效 / 未连接
+
+    /**
+     * 状态区：两个点各代表一件独立的事，绿=好，红=坏。
+     *  1) 模块是否被 LSPosed 真正加载 —— StatusCheck.amEnabled() 只有被 hook 才会返回 true
+     *     （这是"模块真的在跑"的硬证据，不是猜的）
+     *  2) 配置通道是否连上 LSPosed 服务 —— App.svc() != null
+     * 只有两个点都是绿的，设置页的开关才真正写得进去、hook 才真正生效。
+     */
+    private void renderStatus() {
+        if (statusView == null) return;
         io.github.libxposed.service.XposedService s = App.svc();
-        if (s == null) {
-            return "○ 未激活 / 配置通道连接中…\n（在 LSPosed 中启用本模块后此页会自动变为已连接）";
-        }
-        return "● 已激活 · 高德地图\n● 配置通道已连接 · " + s.getFrameworkName() + " " + s.getFrameworkVersion();
+        boolean active = s != null;
+
+        // 作用域：直接问 LSPosed 服务要已勾选的包名列表 —— 这是能真正验证的信号。
+        // （早先用的 StatusCheck.amEnabled() 自检 hook 依赖"模块被注入自己的进程"，
+        //   实测 LSPosed 不会这么做，于是永远 false，明明激活却显示未激活。）
+        String[] targets = {MainHook.PKG_AMAP, MainHook.PKG_BMAP, MainHook.PKG_TMAP};
+        String[] labels = {"高德", "百度", "腾讯"};
+        int scoped = 0;
+        StringBuilder picked = new StringBuilder();
+        try {
+            java.util.List<String> scope = active ? s.getScope() : null;
+            if (scope != null) {
+                for (int i = 0; i < targets.length; i++) {
+                    if (scope.contains(targets[i])) {
+                        scoped++;
+                        if (picked.length() > 0) picked.append(" / ");
+                        picked.append(labels[i]);
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+        boolean scopeOk = scoped > 0;
+
+        String l1 = active
+                ? "已激活 · " + s.getFrameworkName() + " " + s.getFrameworkVersion()
+                : "未激活 · 请在 LSPosed 中启用本模块";
+        String l2;
+        if (!active) l2 = "作用域未知 · 正在等待 LSPosed 服务…";
+        else if (scopeOk) l2 = "作用域已勾选 · " + picked + "（" + scoped + "/3）";
+        else l2 = "作用域未勾选 · 请在 LSPosed 里勾选地图应用";
+
+        String plain = "● " + l1 + "\n● " + l2;
+        android.text.SpannableString ss = new android.text.SpannableString(plain);
+        int second = plain.indexOf('\n') + 1;
+        ss.setSpan(new android.text.style.ForegroundColorSpan(active ? DOT_OK : DOT_BAD),
+                0, 1, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        ss.setSpan(new android.text.style.ForegroundColorSpan(scopeOk ? DOT_OK : DOT_BAD),
+                second, second + 1, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        statusView.setText(ss);
     }
 
     private final android.os.Handler statusHandler =
@@ -147,7 +206,7 @@ public final class MainActivity extends Activity {
 
     private final Runnable statusRefresher = new Runnable() {
         @Override public void run() {
-            if (statusView != null) statusView.setText(statusText());
+            renderStatus();
             // 服务是异步绑定的：绑定前 readState() 只能回退默认 true，
             // 若此时就把开关画成"开"，用户重开设置页会以为配置全丢了。
             // 所以绑定成功后立刻按真实存储重刷一遍开关。
@@ -175,6 +234,7 @@ public final class MainActivity extends Activity {
                 View row = (View) sw.getParent();
                 if (row != null) row.setEnabled(true);
             }
+            refreshSdkRow();
         } catch (Throwable ignored) {}
     }
 
@@ -209,6 +269,50 @@ public final class MainActivity extends Activity {
         root.addView(currentCard, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         currentCard = null;
+    }
+
+    /** 把 SDK 计数刷新成实时值 */
+    private void refreshSdkRow() {
+        try {
+            if (sdkRow != null) sdkRow.setText(sdkSummary());
+        } catch (Throwable ignored) {}
+    }
+
+    /** 设置页上那一行：已自动捕获多少个广告 SDK */
+    private String sdkSummary() {
+        int n = 0;
+        try { n = SdkAutoBlock.learnedListForApp().size(); } catch (Throwable ignored) {}
+        return "已捕获广告 SDK：" + n + " 个 · 点按查看清单";
+    }
+
+    /** 已捕获清单；还能一键清空重新学习 */
+    private void showLearnedSdks() {
+        java.util.List<String> list;
+        try { list = SdkAutoBlock.learnedListForApp(); } catch (Throwable t) { list = null; }
+        if (list == null || list.isEmpty()) {
+            new android.app.AlertDialog.Builder(this)
+                    .setTitle("已捕获广告 SDK")
+                    .setMessage("还没有捕获记录。\n\n模块会扫描三家地图 App 自身 dex 里带广告特征的类，"
+                            + "把厂商包名记下来并拦截；记录跨进程保存，下次启动直接生效。")
+                    .setPositiveButton("知道了", null)
+                    .show();
+            return;
+        }
+        StringBuilder sb = new StringBuilder();
+        for (String s : list) sb.append(s).append('\n');
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("已捕获广告 SDK（" + list.size() + "）")
+                .setMessage(sb.toString().trim())
+                .setPositiveButton("关闭", null)
+                .setNeutralButton("清空重新学习", new android.content.DialogInterface.OnClickListener() {
+                    @Override public void onClick(android.content.DialogInterface d, int w) {
+                        try { SdkAutoBlock.clearLearned(); } catch (Throwable ignored) {}
+                        Toast.makeText(MainActivity.this, "已清空，强停对应地图后重新打开即重新学习",
+                                Toast.LENGTH_LONG).show();
+                        recreate();
+                    }
+                })
+                .show();
     }
 
     /** 统一规格开关行：52dp 高、左标题右 Switch、行间分隔线 */
@@ -270,7 +374,7 @@ public final class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, dp(1))));
     }
 
-    private void addActionButton(String title, final Runnable action) {
+    private TextView addActionButton(String title, final Runnable action) {
         addDivider();
         TextView label = text(title, 15, Typeface.NORMAL, TX_ACCENT);
         label.setPadding(0, dp(12), dp(8), dp(12));
@@ -280,6 +384,7 @@ public final class MainActivity extends Activity {
         });
         currentCard.addView(label, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        return label;
     }
 
     private void addNoteRow(String s) {

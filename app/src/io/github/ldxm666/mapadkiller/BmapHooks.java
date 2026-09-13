@@ -40,22 +40,59 @@ public final class BmapHooks {
         H.hookAll(mgr, "z", "bmap_gate_z", H.FALSE);
 
         // ---- 开屏 SDK 广告隐藏（addView 探测，见类注释）----
+        // 注意：只挂 SplashViewContainer **自己声明** 的 addView 重载。
+        // 绝不能用 hookAll —— 那会沿父类链挂到 ViewGroup.addView，等于全局所有 addView，
+        // 正是 v1.0.2 白屏事故的同款走法。
         Class<?> svc = H.cls(cl, P + "splash.view.SplashViewContainer");
-        H.hookSig(svc, "addView", "bmap_svc_probe", new XposedInterface.Hooker() {
-            @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
-                Object r = chain.proceed();
-                final View child = (View) chain.getArg(0);
-                if (child != null) {
-                    child.post(new Runnable() {
-                        @Override public void run() { probeAndHide(child, 120); }
-                    });
-                    child.postDelayed(new Runnable() {
-                        @Override public void run() { probeAndHide(child, 1000); }
-                    }, 1000);
-                }
-                return r;
+        if (svc != null) {
+            for (java.lang.reflect.Method m : svc.getDeclaredMethods()) {
+                if (!m.getName().equals("addView")) continue;
+                Class<?>[] ps = m.getParameterTypes();
+                if (ps.length == 0 || !View.class.isAssignableFrom(ps[0])) continue;
+                H.module.hook(m).setId("bmap_svc_addview" + ps.length)
+                        .setExceptionMode(XposedInterface.ExceptionMode.DEFAULT)
+                        .intercept(new XposedInterface.Hooker() {
+                            @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+                                final View child = (View) chain.getArg(0);
+                                // 先立即探一次（子树可能已经填好）
+                                if (child != null) probeAndHide(child, 0);
+                                Object r = chain.proceed();
+                                // 广告内容常常是 addView 之后才异步填进去的：
+                                // 1) 极短间隔连探（尽早）
+                                // 2) 再挂 onPreDraw —— 每帧绘制前都探一次，
+                                //    广告内容一出现就在**同一帧**被盖掉，不出现可见闪烁
+                                if (child != null) {
+                                    final long[] delays = {16, 40, 90, 180, 350, 700, 1200};
+                                    for (final long d : delays) {
+                                        if (child.getVisibility() == View.GONE) break;
+                                        child.postDelayed(new Runnable() {
+                                            @Override public void run() { probeAndHide(child, d); }
+                                        }, d);
+                                    }
+                                    try {
+                                        child.getViewTreeObserver().addOnPreDrawListener(
+                                                new android.view.ViewTreeObserver.OnPreDrawListener() {
+                                            private int n;
+                                            @Override public boolean onPreDraw() {
+                                                try {
+                                                    probeAndHide(child, -1);
+                                                    if (++n > 20 || child.getVisibility() == View.GONE) {
+                                                        child.getViewTreeObserver()
+                                                             .removeOnPreDrawListener(this);
+                                                    }
+                                                } catch (Throwable ignored) {}
+                                                return true;
+                                            }
+                                        });
+                                    } catch (Throwable ignored) {}
+                                }
+                                return r;
+                            }
+                        });
             }
-        }, View.class, int.class, ViewGroup.LayoutParams.class);
+            H.log(Log.INFO, MainHook.TAG, "BMAP splash addView hooked on "
+                    + (svc == null ? "?" : svc.getName()));
+        }
 
         // ---- 各 ADN Loader 加载入口 I（三方 SDK 广告数据层拦截）----
         String[] loaders = {
@@ -106,10 +143,14 @@ public final class BmapHooks {
         H.hookAll(yb, "onResumeForYB", "bmap_yb_res", H.VOID);
 
         // ---- 视图兜底（仅杀专属广告视图；SplashViewContainer 由 addView 探测处理）----
+        // 说明：百度首页左上角那个"悬浮推广气泡"是**自营轮播位**，内容走 WebView，
+        // 既不是三方 SDK、也不进无障碍树，SDK 层完全拦不到 —— 只能按宿主资源 id 处理。
+        // （真机 uiautomator dump 实测到的宿主：floatCommonContentLayout / webshell_loading_layout2）
         Sweeper.install(new ViewKiller("BMAP-KILL",
                 "^(com\\.baidu\\.baidumaps\\.integratedads\\.view\\.BannerAdView|" +
                 "com\\.baidu\\.baidumaps\\.integratedads\\.gromore\\.view\\.BannerUIView)$",
-                ":id/(banner_ad|ad_banner|splash_ad_view|mid_banner_container|home_ad_view)$"));
+                ":id/(banner_ad|ad_banner|splash_ad_view|mid_banner_container|home_ad_view|" +
+                "floatCommonContentLayout|floatSliderLayout|float_slider|promo_float)$"));
 
         H.done(MainHook.PKG_BMAP);
     }
@@ -122,9 +163,9 @@ public final class BmapHooks {
             if (res.hit != null) {
                 root.setVisibility(View.GONE);
                 H.log(Log.INFO, MainHook.TAG,
-                        "BMAP splash ad hidden t=" + atMs + "ms hit=" + res.hit
-                                + " root=" + root.getClass().getName()
-                                + " tree=" + res.tree);
+                        "BMAP splash ad hidden at=" + (atMs < 0 ? "preDraw" : atMs + "ms")
+                                + " hit=" + res.hit
+                                + " root=" + root.getClass().getName());
             } else if (!sPassthroughLogged) {
                 sPassthroughLogged = true;
                 H.log(Log.INFO, MainHook.TAG,
@@ -136,12 +177,25 @@ public final class BmapHooks {
         }
     }
 
-    /** 已知 AD SDK 类名特征（21.20.50 实测打包：qq.e / bytedance openadsdk / sigmob / kwai） */
+    /**
+     * 已知 AD SDK / 聚合 / 推广位的类名特征（真机实测校准）。
+     *
+     * 关键教训：旧表只有 qq.e/bytedance/kwad/gdt/sigmob 这些，
+     * 结果百度开屏的聚合广告位 `com.qumeng.advlib.__remote__.ui.elements.SplashCountdownView`
+     * **一个都命中不了**，只能等"跳过"文字出现才认出来 → 广告先亮 1 秒才被盖掉。
+     * 现在补上 qumeng / advlib / splashcountdown 等实测命中项。
+     */
     private static final class AdProbe {
         private static final String[] TOKENS = {
-            "qq.e.", "openadsdk", "bytedance", "pangle", "sigmob", "kwai",
-            "mintegral", "gdt", "mobads", "octopus", "gromore",
-            "adview", "splashad", "ttadview",
+            // 第三方广告 SDK
+            "qq.e", "gdt", "openadsdk", "bytedance", "pangle", "csj", "ttadview",
+            "kwad", "ksad", "kwai", "sigmob", "mintegral", "mbridge",
+            "gromore", "msdk", "octopus", "meishu", "beizi", "tanx", "windmill",
+            "mobads", "adview", "splashad",
+            // 百度开屏聚合位（真机实证命中）
+            "qumeng", "advlib", "splashcountdown",
+            // 通用广告位命名
+            "adloader", "iadloader", "adcontainer",
         };
 
         private static final class Result {
@@ -165,15 +219,11 @@ public final class BmapHooks {
             for (String t : TOKENS) {
                 if (low.contains(t)) { hit[0] = t + ":" + cn; return true; }
             }
-            if (v instanceof TextView) {
-                TextView tv = (TextView) v;
-                CharSequence tx = tv.getText();
-                CharSequence cd = tv.getContentDescription();
-                if ((tx != null && tx.toString().contains("跳过"))
-                        || (cd != null && cd.toString().contains("跳过"))) {
-                    hit[0] = "skip-btn:" + cn;
-                    return true;
-                }
+            String lb = labelOf(v);
+            if (lb != null && (lb.contains("跳过") || lb.contains("跳转") || lb.contains("广告")
+                    || lb.equalsIgnoreCase("Ad") || lb.equalsIgnoreCase("AD"))) {
+                hit[0] = "label:" + lb + ":" + cn;
+                return true;
             }
             if (v instanceof ViewGroup) {
                 ViewGroup g = (ViewGroup) v;
@@ -182,6 +232,19 @@ public final class BmapHooks {
                 }
             }
             return false;
+        }
+
+        /** 短文本标签（跳过/广告 之类角标），限制长度避免把正文当广告标识 */
+        private static String labelOf(View v) {
+            try {
+                CharSequence cd = v.getContentDescription();
+                if (cd != null && cd.length() > 0 && cd.length() <= 8) return cd.toString();
+                if (v instanceof TextView) {
+                    CharSequence tx = ((TextView) v).getText();
+                    if (tx != null && tx.length() > 0 && tx.length() <= 8) return tx.toString();
+                }
+            } catch (Throwable ignored) {}
+            return null;
         }
     }
 }
