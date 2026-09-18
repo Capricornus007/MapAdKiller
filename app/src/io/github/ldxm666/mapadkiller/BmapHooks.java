@@ -161,9 +161,15 @@ public final class BmapHooks {
             if (root.getVisibility() == View.GONE) return;
             AdProbe.Result res = AdProbe.scan(root);
             if (res.hit != null) {
-                root.setVisibility(View.GONE);
+                // 关键：**绝对不能 GONE**。
+                // 真机实证（21.20.x）：把 addView 进来的广告根 GONE 掉之后，
+                // 开屏的「跳过 5」倒计时 / 收尾回调整条链路一起死，
+                // 表现就是用户报的「一直卡在启动界面，要手动按返回键才进主页」。
+                // alpha=0 只让它看不见：视图照常 measure/layout/跑动画/收回调，
+                // 开屏按自己的节奏正常收尾，广告零曝光。
+                root.setAlpha(0f);
                 H.log(Log.INFO, MainHook.TAG,
-                        "BMAP splash ad hidden at=" + (atMs < 0 ? "preDraw" : atMs + "ms")
+                        "BMAP splash ad hidden(alpha0) at=" + (atMs < 0 ? "preDraw" : atMs + "ms")
                                 + " hit=" + res.hit
                                 + " root=" + root.getClass().getName());
             } else if (!sPassthroughLogged) {

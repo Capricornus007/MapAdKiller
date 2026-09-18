@@ -1,10 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="io.github.ldxm666.mapadkiller"
-    android:versionCode="7"
-    android:versionName="1.0.6">
+    android:versionCode="8"
+    android:versionName="1.0.7">
 
     <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="34" />
+
+    <!-- 隐藏桌面图标后，靠一条常驻通知留住回设置页的入口 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:name=".App"
@@ -13,14 +16,24 @@
         android:icon="@drawable/ic_launcher"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
 
+        <!-- 设置页本体：不挂 LAUNCHER，只留 exported 便于 adb / 通知跳转 -->
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true" />
+
+        <!-- 桌面图标开关就切这个别名组件：关掉它图标消失，打开它图标回来 -->
+        <activity-alias
+            android:name=".LauncherAlias"
+            android:targetActivity=".MainActivity"
+            android:exported="true"
+            android:enabled="true"
+            android:label="MapAdKiller"
+            android:icon="@drawable/ic_launcher">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-        </activity>
+        </activity-alias>
 
         <receiver
             android:name=".LearnedReceiver"

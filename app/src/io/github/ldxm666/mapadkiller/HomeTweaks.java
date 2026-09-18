@@ -97,7 +97,10 @@ public final class HomeTweaks {
         TOOL_ALIAS.put("景点游玩", "更多工具");
         TOOL_ALIAS.put("离线地图", "更多工具");
         TOOL_ALIAS.put("通行费助手", "更多工具");
-        TOOL_ALIAS.put("收藏夹", "更多工具");
+        // 「收藏夹」不再并进「更多工具」：它在宫格第 3 行有自己的槽位，
+        // 混进别名后永远被 tool_更多工具 与 扩展工具页 两个开关夹击，
+        // 用户怎么点都出不来。这里给它自己一个键（Config.K_TOOL_FAVORITE）。
+        TOOL_ALIAS.put("收藏夹", "收藏夹");
     }
 
     /**
@@ -107,7 +110,7 @@ public final class HomeTweaks {
      * **默认隐藏** —— 否则首页往下拉就会冒出一整排没被关掉的格子。
      */
     private static final Set<String> TOOL_EXTRA_LABELS = new HashSet<>(Arrays.asList(
-            "景点游玩", "离线地图", "通行费助手", "收藏夹", "旅游度假"));
+            "景点游玩", "离线地图", "通行费助手", "旅游度假"));
 
     /** 推荐频道栏 —— 只在"宽格子"里算数，避免误伤达人卡里的粉丝/关注计数（85px 窄格）。 */
     private static final Set<String> FEED_FILTER_LABELS =
@@ -115,6 +118,34 @@ public final class HomeTweaks {
 
     private static final Set<String> HOME_CHIPS_LABELS =
             new HashSet<>(Arrays.asList("设置家", "设置单位", "常去地点"));
+
+    /**
+     * 「去XX」快捷打车卡的旁证文案。
+     * 标题本身是"去 + 目的地名"（随用户而变），没法写死，所以用旁边这些小字当判据：
+     * 只有当标题以「去」开头、**并且**同一小块里还挂着下面任意一条时，才认这张卡。
+     * 这样「去扫描」那种信息流文案不会被误伤。
+     */
+    private static final Set<String> QUICK_CARD_HINTS = new HashSet<>(Arrays.asList(
+            "有座不拥挤", "行程有保障", "打车不排队", "特惠打车", "预估", "打车", "AI叫车"));
+
+    /**
+     * 这些文案本身就够独特，命中即可认卡，不需要旁证。
+     * 「帮我预约车辆 / 通勤高峰担心拥堵、叫不到车 / AI叫车」和「去XX」是**同一个轮播槽位**
+     * 里的两张卡（高德按账号下发），所以共用同一个开关。
+     */
+    private static final String[] QUICK_CARD_SELF = {
+            "帮我预约车辆", "帮我叫车", "预约车辆", "AI叫车",
+            "叫不到车", "通勤高峰担心拥堵", "有座不拥挤", "行程有保障",
+    };
+
+    /**
+     * 搜索页金刚区的分类文案。判定方式是"结构投票"：
+     * 只有当一个容器里同时挂着 >=4 个这些文案时，才认它是那一排运营位。
+     * 单看一个「美食」绝不能动手 —— 首页信息流、我的页、工具宫格里都有它。
+     */
+    private static final Set<String> SEARCH_CAT_LABELS = new HashSet<>(Arrays.asList(
+            "美食", "酒店", "加油站", "休闲玩乐", "扫街榜", "充电站", "洗车", "修车",
+            "特价酒店", "民宿", "景点门票", "电影", "丽人", "亲子", "购物", "加油"));
 
     // ----「我的」页：精确匹配（先做装饰字符归一）----
     private static final Set<String> MY_ORDER = new HashSet<>(Arrays.asList(
@@ -169,6 +200,18 @@ public final class HomeTweaks {
     private static final List<java.lang.ref.WeakReference<View>> hiddenCells = new ArrayList<>();
     /** 已收空的工具行（需要连同高度一起压成 0，否则宫格仍留白） */
     private static final List<java.lang.ref.WeakReference<View>> squashedRows = new ArrayList<>();
+    /** 收行之前那一行的原始 lp.height，用来反悔（配置改回来 / 误判纠正） */
+    private static final WeakHashMap<View, Integer> squashOrigHeight = new WeakHashMap<>();
+
+    /**
+     * 每个工具格最终"留还是不留"的结论（配置驱动，不看几何）。
+     *
+     * 为什么必须要这张表：判"这一行是不是空行"如果看当时的 width/height，
+     * AJX 还没量过的时候每个格子都是 0x0，整行会被误判成空行收掉；
+     * 而 squashedRows 每轮都会重申 GONE + height=0 —— 那一行就**永久**死了。
+     * 收藏夹开开关也出不来就是这个：它所在的那一行在首帧就被收成了空行。
+     */
+    private static final WeakHashMap<View, Boolean> cellKeep = new WeakHashMap<>();
     /** 已收缩的宿主 → 规则（去重 + 幂等） */
     private static final WeakHashMap<View, String> hiddenWhy = new WeakHashMap<>();
     /** 已挂过 onBindViewHolder 的列表适配器类（按类去重，一个类只挂一次） */
@@ -186,6 +229,21 @@ public final class HomeTweaks {
 
     private static ViewGroup tabRow;
 
+    /**
+     * 本模块的铁律 G：只在高德首页动手。
+     *
+     * 以前每一轮 applyPass 都是「整棵 decor 树照单全收」，于是任意页面上的自由文案
+     * 都会被当成首页锚点。踩得最狠的一次是路线规划页：备选路线的里程文案
+     * 2379公里 / 34米 命中 isDistanceLabel（首页信息流卡片的距离标签规则），
+     * collapseHost 顺着父链爬到列表宿主，把「24小时22分 / 封路」那一整排路线信息
+     * 模块 GONE 掉 —— 这就是「信息模块也被隐藏」的根因。
+     *
+     * 首页与「我的」页都带底部悬浮标签栏（LiteTabBar > TabItemLayoutV2），
+     * 路线页 / 搜索页 / 导航页没有。所以用「这棵树里有没有一条正在显示的标签栏」
+     * 当作「是不是首页」的判据：不是首页就整轮放弃，一个节点都不碰。
+     */
+    private static volatile boolean homeCtx;
+
     private HomeTweaks() {}
 
     // ══════════════════════════════════════════════════════════ 安装
@@ -201,6 +259,7 @@ public final class HomeTweaks {
                             Object r = chain.proceed();
                             activity = (Activity) chain.getThisObject();
                             tabRow = null;
+                            homeCtx = false;   // 新页面先当"不是首页"，由 applyPass 认领
                             channelDone = false;
                             channelSince = System.currentTimeMillis();
                             scheduled = false;
@@ -208,6 +267,8 @@ public final class HomeTweaks {
                             for (long d : new long[]{100, 350, 800, 1500, 2600, 4200}) {
                                 MAIN.postDelayed(APPLY, d);
                             }
+                            MAIN.removeCallbacks(REASSERT);
+                            MAIN.postDelayed(REASSERT, 600);
                             return r;
                         }
                     });
@@ -218,6 +279,7 @@ public final class HomeTweaks {
                             activity = null;
                             tabRow = null;
                             MAIN.removeCallbacks(APPLY);
+                            MAIN.removeCallbacks(REASSERT);
                             return chain.proceed();
                         }
                     });
@@ -333,7 +395,12 @@ public final class HomeTweaks {
 
         String toolKey = TOOL_ALIAS.get(t);
         String rule = toolKey != null ? null : ruleFor(t, v);
-        if (toolKey == null && rule == null) return;
+        // 搜索金刚区的文案也要登记（它们多数不属于任何一种首页规则，但要做结构投票）
+        // 「去XX」快捷卡的标题同理：它出现时旁边的「打车 / 有座不拥挤」可能还没 setText，
+        // 当场判定必然落空 —— 所以先按文案形状乐观登记，旁证留给 applyPass 每轮再判。
+        if (toolKey == null && rule == null
+                && !SEARCH_CAT_LABELS.contains(t) && !looksLikeQuickCardTitle(t)
+                && !isSelfEvidentQuickCard(t)) return;
 
         synchronized (LOCK) { anchors.put(v, t); }
         trace(v, t);
@@ -344,9 +411,16 @@ public final class HomeTweaks {
             String ck = cell == null ? null : cellKey.get(cell);
             if (ck != null) key = ck;   // 轮播格的其它文案复用本格已登记的键
         }
-        if (key != null && !cfgOn(Config.K_TOOL_PREFIX + key)) {
-            if (v.getVisibility() != View.GONE) v.setVisibility(View.GONE);
-        } else if (rule != null && !cfgOn(rule)) {
+        // 即时盖标题（消闪烁）——但**必须先确认这是首页的东西**。
+        // 「更多工具」那一整页里也有「收藏夹 / 代驾 / 旅游度假…」这些文案，
+        // 原来不加区分地盖，那一页的入口就变成"有图标没字"，
+        // 用户看到的正是"偶尔跳出其他工具出来"。
+        if (key != null) {
+            View cell = ascendSmallCell(v);
+            if (cell != null && looksLikeToolCell(cell) && !cfgOn(Config.K_TOOL_PREFIX + key)) {
+                if (v.getVisibility() != View.GONE) v.setVisibility(View.GONE);
+            }
+        } else if (rule != null && !cfgOn(rule) && homeCtx) {
             if (v.getVisibility() != View.GONE) v.setVisibility(View.GONE);
         }
         schedule();
@@ -377,7 +451,25 @@ public final class HomeTweaks {
         try { decor = act.getWindow().getDecorView(); } catch (Throwable t) { return; }
         if (decor == null) return;
 
-        applyTabs(decor);
+        // 锚点快照先拍下来：下面几条规则都用它
+        List<View> views = new ArrayList<>();
+        List<String> texts = new ArrayList<>();
+        synchronized (LOCK) {
+            for (Map.Entry<View, String> e : anchors.entrySet()) {
+                views.add(e.getKey());
+                texts.add(e.getValue());
+            }
+        }
+
+        // 铁律 G：先认页面。认得出首页（有正在显示的底部标签栏）才继续往下做，
+        // 认不出就整轮什么都不动植物 —— 路线页/搜索页/导航页从此免疫。
+        homeCtx = applyTabs(decor);
+
+        // 搜索页金刚区（美食 / 酒店 / 加油站 / 休闲玩乐 / 扫街榜）不属于首页，
+        // 所以在首页闸门**之前**单独跑，而且只认"一个容器里同时挂着 >=4 个分类文案"的结构。
+        applySearchCats(views, texts);
+
+        if (!homeCtx) return;
 
         // 推荐频道栏（关注 / 成都 / 附近 / 周末出游 / 美食 / 休闲玩乐）：
         // 实测它的文案既不走 Label.setText 也不走 Label.setAttribute("text")，
@@ -394,40 +486,49 @@ public final class HomeTweaks {
             }
         }
 
-        List<View> views = new ArrayList<>();
-        List<String> texts = new ArrayList<>();
-        synchronized (LOCK) {
-            for (Map.Entry<View, String> e : anchors.entrySet()) {
-                views.add(e.getKey());
-                texts.add(e.getValue());
-            }
-        }
-
         applyTools(views, texts);
+
+        // 运营推广卡槽位：绑定那一刻 item 还没量过（0x0），所以这里按布局后的几何再找一遍
+        applyPromoSlot(decor);
 
         for (int i = 0; i < views.size(); i++) {
             String t = texts.get(i);
             if (TOOL_ALIAS.containsKey(t)) continue;
             String rule = ruleFor(t, views.get(i));
             if (rule == null || cfgOn(rule)) continue;
+            // 「设置家 / 设置单位 / 常去地点」只摘这一排 —— 它和「去幸福路步行街」
+            // 那种快捷卡常常在**同一个 AJX item** 里，collapseHost 会把整张卡一起收掉，
+            // 用户看到的就是"那张卡变成半张、文字被切"。
+            if (hideChipsRowOnly(views.get(i), rule)) continue;
             collapseHost(views.get(i), rule);
         }
 
         reassert();
     }
 
+    /**
+     * 常驻重申心跳（只跑 reassert，不做全树扫描，代价极小）。
+     *
+     * 为什么必须有：resume 时只排了 6 轮 APPLY（最晚 4.2s），之后 applyPass 就停手了。
+     * 而 AJX 在滚动 / 重渲染时会把被压掉的 item **复活成 VISIBLE 但保留我们写的
+     * height=0** —— 于是那张卡被画成"半张、文字被切"的样子（用户截图里那张
+     * 「去幸福路步行街」就是），很难看。有了心跳，复活后最多 300ms 就被按回 GONE。
+     */
+    private static final Runnable REASSERT = new Runnable() {
+        @Override public void run() {
+            if (activity == null) return;
+            try { reassert(); } catch (Throwable ignored) {}
+            MAIN.postDelayed(this, 300);
+        }
+    };
+
     /** 每轮重申（AJX 重渲染会复活可见性 / 复位高度）。 */
     private static void reassert() {
         for (Iterator<java.lang.ref.WeakReference<View>> it = hiddenItems.iterator(); it.hasNext(); ) {
             View v = it.next().get();
             if (v == null) { it.remove(); continue; }
-            if (v.getVisibility() != View.GONE) v.setVisibility(View.GONE);
-            // AJX 把 item 复活成有高度时才补 0，避免无谓的 LayoutParams 抖动
-            ViewGroup.LayoutParams lp = v.getLayoutParams();
-            if (lp != null && lp.height != 0 && v.getHeight() > 0) {
-                lp.height = 0;
-                v.setLayoutParams(lp);
-            }
+            // AJX 一复活就立刻按回去（GONE + height 0 一起，不能只做一半）
+            reapplyHidden(v);
         }
         for (Iterator<java.lang.ref.WeakReference<View>> it = hiddenCells.iterator(); it.hasNext(); ) {
             View v = it.next().get();
@@ -457,6 +558,8 @@ public final class HomeTweaks {
             View anchor = views.get(i);
             View cell = ascendSmallCell(anchor);
             if (cell == null) continue;          // 还没挂载：留在常驻索引里，下一轮再说
+            if (!looksLikeToolCell(cell)) continue;   // 形状不像工具格 → 不是宫格里的东西
+
             String key = cellKey.get(cell);
             if (key == null) { key = toolKey; cellKey.put(cell, key); }
             // 记下该格当前显示的 Label：优先保留"真的画出来了"（width>0）的那个实例
@@ -467,15 +570,20 @@ public final class HomeTweaks {
             }
             protectTool(cell, key);
 
-            // 扩展页整排单独控制（默认隐藏）：不看单个工具的开头，只看扩展页开关
-            if (TOOL_EXTRA_LABELS.contains(t) && !cfgExtraPage()) {
-                hideCell(cell, "extra:" + t, dirtyRows);
+            // ── 留还是不留，只看「这一格此刻显示的那个文案」自己的开关 ──
+            // 这里绝不能用 cellKey：它是首见文案钉住的键，而宫格第 3 行是**轮播格**
+            // （景点游玩 / 离线地图 / 通行费助手 / 收藏夹 / 更多工具 在这些槽位里换），
+            // 第一个撞上来的如果是「通行费助手」，这一格就被钉成 tool_更多工具，
+            // 之后轮到「收藏夹」也照样按那个键判 —— 用户开了收藏夹开关也永远出不来。
+            boolean extra = TOOL_EXTRA_LABELS.contains(t);
+            boolean keep = extra ? cfgExtraPage() : cfgOn(Config.K_TOOL_PREFIX + toolKey);
+            markKeep(cell, keep);
+            if (Boolean.TRUE.equals(cellKeep.get(cell))) {
+                // 保过一次就永久保（轮播格轮到收藏夹时把它放出来）
+                unHideCell(cell);
                 continue;
             }
-
-            if (cfgOn(Config.K_TOOL_PREFIX + key)) continue;
-
-            hideCell(cell, key, dirtyRows);
+            hideCell(cell, extra ? ("extra:" + t) : key, dirtyRows);
         }
         // 宫格级"补空"：只在**同一行内**把可见格左对齐压实，绝不换父。
         // 换父（removeView/addView 把第 3 行的格搬进第 1 行）实测会被 AJX 的
@@ -501,6 +609,23 @@ public final class HomeTweaks {
         }
     }
 
+    /**
+     * 这一坨到底是不是工具宫格里的格子。
+     *
+     * 为什么必须问这一句：首页底下那张「去幸福路步行街」快捷卡里也有一个写着
+     * 「打车」的按钮，`ascendSmallCell` 照样能爬到它的容器（161x95，父容器 1006x210）——
+     * 于是那张卡被当成宫格的一格，`packRow` 按工具格尺寸把整张卡重排，
+     * 卡片文字被压成 84px 宽（"去幸"后面全被切掉），就是用户报的「半遮住、很难看」。
+     *
+     * 真机实测工具格：158x147 / 158x164；那张卡里的按钮是 161x95，高度直接出界。
+     * 还没量过（0x0）的一律放行，交给下一轮。
+     */
+    private static boolean looksLikeToolCell(View cell) {
+        int w = cell.getWidth(), h = cell.getHeight();
+        if (w <= 0 || h <= 0) return true;
+        return w >= 120 && w <= 220 && h >= 120 && h <= 200;
+    }
+
     /** 隐藏一个工具格并登记该行待重排 */
     private static void hideCell(View cell, String id, Set<ViewGroup> dirtyRows) {
         if (cell.getVisibility() != View.GONE) {
@@ -512,6 +637,19 @@ public final class HomeTweaks {
         }
         ViewParent p = cell.getParent();
         if (p instanceof ViewGroup) dirtyRows.add((ViewGroup) p);
+    }
+
+    /** 撤回一次 GONE：隐藏登记表里摘掉、可见性摆回来，reassert 才不会下一轮又按下去 */
+    private static void unHideCell(View cell) {
+        boolean had = false;
+        for (Iterator<java.lang.ref.WeakReference<View>> it = hiddenCells.iterator(); it.hasNext(); ) {
+            View v = it.next().get();
+            if (v == null || v == cell) { it.remove(); had = true; }
+        }
+        if (cell.getVisibility() != View.VISIBLE) cell.setVisibility(View.VISIBLE);
+        if (had && loggedOnce.add("cellrestore_" + System.identityHashCode(cell))) {
+            H.log(Log.INFO, MainHook.TAG, "TOOL-RESTORE " + geom(cell));
+        }
     }
 
     /** 格子 + 其行 + 宫格登记为受保护，杜绝被推荐区锚点顺手抹掉。 */
@@ -554,6 +692,9 @@ public final class HomeTweaks {
         int originX = cells.get(0).getLeft();
         int cellW = cells.get(0).getWidth();
         int cellH = cells.get(0).getHeight();
+        // 第二道保险：只重排"看起来就是工具行"的行。
+        // 否则任何被误判成工具格的容器都会被按 158 宽重排，卡片会当场被压烂。
+        if (cellW < 120 || cellW > 220 || cellH < 120 || cellH > 200) return;
         int top = cells.get(0).getTop();
         int pitch = cellW;
         int d = cells.get(1).getLeft() - originX;
@@ -595,21 +736,23 @@ public final class HomeTweaks {
      * 只 GONE 不收高度的话，AJX 的宫格容器仍按模型留出那一行的空白
      * —— 这就是"剩下两个工具下面一大片空"的原因。宫格只有全空才收。
      */
+    /**
+     * 一行全空才收行。判据是 markKeep 登记下来的"配置结论"，不是当时的几何 ——
+     * 否则首帧还没量过就会被误判成空行，而 squashedRows 每轮重申，那一行永久消失。
+     * 反过来，如果这一行里还有该留的格子（比如刚被单独放出来的「收藏夹」），
+     * 这里负责把它**放回去**。
+     */
     private static void squashRowIfEmpty(ViewGroup row) {
-        int visible = 0;
-        for (int i = 0; i < row.getChildCount(); i++) {
-            View c = row.getChildAt(i);
-            if (c.getVisibility() != View.GONE && c.getWidth() > 0 && c.getHeight() > 0) visible++;
-        }
-        if (visible > 0) return;
+        if (rowKeepsAnything(row)) { unSquashRow(row); return; }
 
         if (row.getVisibility() != View.GONE) row.setVisibility(View.GONE);
         ViewGroup.LayoutParams lp = row.getLayoutParams();
         if (lp != null && lp.height != 0) {
+            squashOrigHeight.put(row, lp.height);   // 记住原值，方便反悔
             lp.height = 0;
             row.setLayoutParams(lp);
         }
-        squashedRows.add(new java.lang.ref.WeakReference<>(row));
+        if (!isSquashListed(row)) squashedRows.add(new java.lang.ref.WeakReference<>(row));
         if (loggedOnce.add("emptyrow_" + System.identityHashCode(row))) {
             H.log(Log.INFO, MainHook.TAG, "TOOL-ROW-EMPTY " + geom(row));
         }
@@ -620,13 +763,160 @@ public final class HomeTweaks {
         int gv = 0;
         for (int i = 0; i < grid.getChildCount(); i++) {
             View c = grid.getChildAt(i);
-            if (c.getVisibility() != View.GONE && c.getWidth() > 0 && c.getHeight() > 0) gv++;
+            if (c.getVisibility() != View.GONE) gv++;
         }
         if (gv == 0 && grid.getVisibility() != View.GONE) {
             grid.setVisibility(View.GONE);
             if (loggedOnce.add("emptygrid_" + System.identityHashCode(grid))) {
                 H.log(Log.INFO, MainHook.TAG, "TOOL-GRID-EMPTY " + geom(grid));
             }
+        }
+    }
+
+    /** 这一行里还有没有"该显示"的格子。没分类过的格子一律当"要显示"（保守）。 */
+    private static boolean rowKeepsAnything(ViewGroup row) {
+        for (int i = 0; i < row.getChildCount(); i++) {
+            View c = row.getChildAt(i);
+            if (c.getVisibility() == View.GONE) continue;
+            Boolean keep = cellKeep.get(c);
+            if (keep == null || keep) return true;
+        }
+        return false;
+    }
+
+    /** 把收掉的行放回来（配置改回来 / 之前误判） */
+    private static void unSquashRow(ViewGroup row) {
+        for (Iterator<java.lang.ref.WeakReference<View>> it = squashedRows.iterator(); it.hasNext(); ) {
+            View v = it.next().get();
+            if (v == null || v == row) it.remove();
+        }
+        boolean changed = false;
+        if (row.getVisibility() != View.VISIBLE) { row.setVisibility(View.VISIBLE); changed = true; }
+        // 宫格本身可能因为"所有行都空"被收掉，行放回来了，宫格也得跟着回来
+        ViewParent gp = row.getParent();
+        if (gp instanceof View && ((View) gp).getVisibility() != View.VISIBLE) {
+            ((View) gp).setVisibility(View.VISIBLE);
+            changed = true;
+        }
+        ViewGroup.LayoutParams lp = row.getLayoutParams();
+        Integer orig = squashOrigHeight.get(row);
+        if (lp != null && lp.height == 0) {
+            lp.height = orig != null ? orig : ViewGroup.LayoutParams.WRAP_CONTENT;
+            row.setLayoutParams(lp);
+            changed = true;
+        }
+        if (changed && loggedOnce.add("unsquash_" + System.identityHashCode(row))) {
+            H.log(Log.INFO, MainHook.TAG, "TOOL-ROW-RESTORE " + geom(row));
+        }
+    }
+
+    private static boolean isSquashListed(View row) {
+        for (java.lang.ref.WeakReference<View> r : squashedRows) if (r.get() == row) return true;
+        return false;
+    }
+
+    /** 登记一个工具格"留还是不留"。留的结论优先 —— 同一格轮播多个文案时，任一开着就留着。 */
+    private static void markKeep(View cell, boolean keep) {
+        if (keep) cellKeep.put(cell, Boolean.TRUE);
+        else if (!cellKeep.containsKey(cell)) cellKeep.put(cell, Boolean.FALSE);
+    }
+
+    // ══════════════════════════════════════════════════════════ 搜索页金刚区
+
+    /**
+     * 摘掉搜索页顶部那一排运营分类（美食 / 酒店 / 加油站 / 休闲玩乐 / 扫街榜…）。
+     *
+     * 判定原则是"结构投票"，不是单文案命中：只有某个容器里同时挂着 >=4 个分类文案，
+     * 才认它是那一排；命中的是**从上往下第一个**满足的祖先，也就是最小那个 ——
+     * 再往上就是整页容器了。
+     * 这一条不属于首页，所以跑在 homeCtx 闸门之前（搜索页没有底部标签栏）。
+     */
+    private static void applySearchCats(List<View> views, List<String> texts) {
+        if (cfgOn(Config.K_SEARCH_CATS)) return;
+        for (int i = 0; i < views.size(); i++) {
+            if (!SEARCH_CAT_LABELS.contains(texts.get(i))) continue;
+            View anchor = views.get(i);
+            if (hiddenWhy.containsKey(anchor)) continue;
+            View row = findCategoryRow(anchor);
+            if (row == null) continue;
+            row = widenToDots(row);                 // 连同下面那排分页小圆点一起
+            if (hiddenWhy.containsKey(row)) continue;
+            if (row.getVisibility() != View.GONE) row.setVisibility(View.GONE);
+            ViewGroup.LayoutParams lp = row.getLayoutParams();
+            if (lp != null && lp.height != 0 && row.getHeight() > 0) {
+                lp.height = 0;
+                row.setLayoutParams(lp);
+            }
+            hiddenItems.add(new java.lang.ref.WeakReference<>(row));
+            hiddenWhy.put(row, Config.K_SEARCH_CATS);
+            H.log(Log.INFO, MainHook.TAG, "SEARCHCAT-HIDE " + shortName(row) + " " + geom(row)
+                    + " | " + chainOf(anchor));
+            return;                       // 一处命中就够，避免连带误伤
+        }
+    }
+
+    /** 祖先链上有没有横向分页滚动容器（搜索页金刚区独有的结构特征） */
+    private static boolean insideHorizontalScroller(View v) {
+        View cur = v;
+        for (int i = 0; i < 8 && cur.getParent() instanceof View; i++) {
+            cur = (View) cur.getParent();
+            if (cur.getClass().getName().endsWith("HorizontalScroller")) return true;
+        }
+        return false;
+    }
+
+    /** 从锚点往上找**最小**的、子树里挂着 >=4 个分类文案的祖先 */
+    private static View findCategoryRow(View anchor) {
+        View cur = anchor;
+        for (int i = 0; i < 10 && cur.getParent() instanceof View; i++) {
+            View p = (View) cur.getParent();
+            Set<String> found = new HashSet<>();
+            countCats(p, found, 0);
+            if (found.size() >= 4) {
+                // 宽度护栏：这一排一定是整屏宽（实测 1080），半屏宽的卡片一律不碰
+                int w = p.getWidth();
+                if (w > 0 && w < 600) return null;
+                // **关键护栏**：搜索页金刚区是「分页横向滚动条」里的一排，
+                // 祖先链上一定有 HorizontalScroller。
+                // 没有这道闸门，「更多工具」页那一整页分类宫格（美食 / 洗车养车 / 洗牙…
+                // 全是同一批词）会被整页收掉 —— 用户看到的就是"点进去白屏"。
+                if (!insideHorizontalScroller(p)) return null;
+                return p;
+            }
+            cur = p;
+        }
+        return null;
+    }
+
+    /**
+     * 找到的那一层只是「一页」，分页小圆点是它的叔伯节点。
+     * 往上走几层，把高度只多出一点点（那点差值就是圆点的高度）的包装层一起收掉，
+     * 否则金刚区没了、圆点还在屏幕上杵着一条空带。
+     */
+    private static View widenToDots(View row) {
+        View target = row;
+        if (row.getHeight() <= 0) return row;
+        for (int i = 0; i < 5; i++) {
+            ViewParent p = target.getParent();
+            if (!(p instanceof View)) break;
+            View pv = (View) p;
+            int ph = pv.getHeight(), pw = pv.getWidth();
+            if (ph <= 0 || ph > target.getHeight() * 150 / 100) break;
+            if (pw > 0 && target.getWidth() > 0 && pw > target.getWidth() + 60) break;
+            target = pv;
+        }
+        return target;
+    }
+
+    private static void countCats(View v, Set<String> found, int depth) {
+        if (v == null || depth > 14 || found.size() >= 8) return;
+        synchronized (LOCK) {
+            String t = anchors.get(v);
+            if (t != null && SEARCH_CAT_LABELS.contains(t)) found.add(t);
+        }
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) countCats(g.getChildAt(i), found, depth + 1);
         }
     }
 
@@ -648,14 +938,28 @@ public final class HomeTweaks {
 
     // ══════════════════════════════════════════════════════════ 标签栏（原生）
 
-    private static void applyTabs(View root) {
+    /**
+     * 标签栏处理，同时兼任「这页是不是高德首页」的判据（返回值）。
+     *
+     * 三件事：
+     *  1) 按配置藏掉不要的标签；
+     *  2) 剩下的标签平分整条栏（weight=1，width=0）；
+     *  3) 把每个可见槽位的胶囊背景层 tab_bg_layer 撑成槽位本身 —— 见下方注释。
+     *
+     * 返回 true = 认得出这是一棵首页树（有标签栏且真的在显示）。
+     */
+    private static boolean applyTabs(View root) {
         try {
             ViewGroup row = tabRow;
             if (row == null || row.getParent() == null) {
                 row = findTabRow(root, 0);
                 tabRow = row;
             }
-            if (row == null || row.getChildCount() <= 1) return;
+            if (row == null) return false;
+            // 认页面：标签栏必须真的挂在窗口上且处在显示状态。
+            // 路线页 / 搜索页 / 导航页要么没有这条栏，要么它不在树上 —— 一律判 false。
+            if (!row.isShown()) return false;
+            if (row.getChildCount() <= 1) return false;
 
             int visible = 0;
             for (int i = 0; i < row.getChildCount(); i++) {
@@ -675,12 +979,12 @@ public final class HomeTweaks {
                     visible++;
                 }
             }
-            if (visible == 0) return;   // 全关也不收条，避免只剩 0 宽的残条
+            if (visible == 0) return true;   // 全关也不收条，避免只剩 0 宽的残条
 
             for (int i = 0; i < row.getChildCount(); i++) {
                 View c = row.getChildAt(i);
                 if (c.getVisibility() == View.GONE) continue;
-                if (!(c.getLayoutParams() instanceof android.widget.LinearLayout.LayoutParams)) return;
+                if (!(c.getLayoutParams() instanceof android.widget.LinearLayout.LayoutParams)) continue;
                 android.widget.LinearLayout.LayoutParams lp =
                         (android.widget.LinearLayout.LayoutParams) c.getLayoutParams();
                 if (lp.width != 0 || lp.weight != 1f) {
@@ -689,7 +993,53 @@ public final class HomeTweaks {
                     c.setLayoutParams(lp);
                 }
             }
-        } catch (Throwable ignored) {}
+
+            // ── 标签栏补满 ──────────────────────────────────────────────
+            // 藏标签只改了槽位宽（weight 平分），但「选中胶囊」那一层
+            // (id=tab_bg_layer) 的宽度是高德自己按 totalWidth / 标签总数 算死的，
+            // 它不知道我们藏了几个。于是 5 个标签变 2 个之后，胶囊还是 201px，
+            // 两个标签悬在 1/4、3/4 的位置，中间和两头全是空的 —— 用户截图里
+            // 「首页/我的不占满整个悬浮栏」就是这个。
+            // 把胶囊层撑成它所在槽位的宽度，等价于高德自己按 2 个标签排出来的样子。
+            int rowW = row.getWidth();
+            if (rowW <= 0) {
+                ViewParent rp = row.getParent();
+                rowW = rp instanceof View ? ((View) rp).getWidth() : 0;
+            }
+            if (rowW <= 0) rowW = 1080;
+            final int slot = Math.max(1, rowW / visible);
+            for (int i = 0; i < row.getChildCount(); i++) {
+                View c = row.getChildAt(i);
+                if (c.getVisibility() == View.GONE) continue;
+                if (!(c instanceof ViewGroup)) continue;
+                View bg = childByIdName((ViewGroup) c, "tab_bg_layer");
+                if (bg == null) continue;
+                ViewGroup.LayoutParams blp = bg.getLayoutParams();
+                if (blp != null && blp.width != slot) {
+                    blp.width = slot;
+                    bg.setLayoutParams(blp);
+                    if (loggedOnce.add("tabfill_" + System.identityHashCode(c))) {
+                        H.log(Log.INFO, MainHook.TAG, "TAB-FILL slot=" + slot
+                                + " visible=" + visible + " rowW=" + rowW);
+                    }
+                }
+            }
+            return true;
+        } catch (Throwable ignored) { return false; }
+    }
+
+    /** 按 android:id 名字找直接子 view（id 在对方包里，只能用 getResourceName 比对） */
+    private static View childByIdName(ViewGroup g, String idName) {
+        for (int i = 0; i < g.getChildCount(); i++) {
+            View c = g.getChildAt(i);
+            try {
+                int rid = c.getId();
+                if (rid == View.NO_ID || rid == 0) continue;
+                String n = c.getResources().getResourceName(rid);
+                if (n != null && n.endsWith(":id/" + idName)) return c;
+            } catch (Throwable ignored) {}
+        }
+        return null;
     }
 
     private static ViewGroup findTabRow(View v, int depth) {
@@ -773,11 +1123,6 @@ public final class HomeTweaks {
             return;
         }
         if (item.getVisibility() != View.GONE) item.setVisibility(View.GONE);
-        ViewGroup.LayoutParams lp = item.getLayoutParams();
-        if (lp != null && lp.height != 0 && h > 0) {
-            lp.height = 0;
-            item.setLayoutParams(lp);
-        }
         hiddenItems.add(new java.lang.ref.WeakReference<>(item));
         hiddenWhy.put(item, rule);
         H.log(Log.INFO, MainHook.TAG, "COLLAPSE " + rule + " " + shortName(item) + " " + geom(item));
@@ -1005,9 +1350,21 @@ public final class HomeTweaks {
      *     任何锚点词都匹配不到 → 靠**结构**兜底：半屏宽 + 高卡的 item 就是内容流帖子卡。
      */
     private static void onItemBound(final View item) {
-        if (hiddenWhy.containsKey(item)) return;
+        if (!homeCtx) return;          // 非首页列表（路线备选卡等）一概不判
+        if (hiddenWhy.containsKey(item)) {
+            // AJX 每次重绑都会把 itemView 重新 setVisibility(VISIBLE)，
+            // 但**保留我们写进去的 height=0** —— 于是那张卡被画成"半张、文字被切"。
+            // 这里就在重绑的同一次调用里按回去，不留任何一帧的残缺状态。
+            reapplyHidden(item);
+            return;
+        }
         String rule = ruleForItem(item);
-        if (rule != null) { hideItem(item, rule); return; }
+        if (rule != null) {
+            // 同一条护栏：chips 只摘那一排，不要把整张 item 收掉
+            if (chipsRowOnlyInItem(item, rule)) return;
+            hideItem(item, rule);
+            return;
+        }
         // 当场没判出来（文字还没到）→ 挂 preDraw 再判，最多 12 帧
         try {
             item.getViewTreeObserver().addOnPreDrawListener(
@@ -1033,8 +1390,107 @@ public final class HomeTweaks {
         } catch (Throwable ignored) {}
     }
 
+    /**
+     * 首页那个运营推广卡槽位的**结构**判据。
+     *
+     * 为什么最后落到结构上：这个槽位是高德的轮播位，标题一天能换好几张 ——
+     * 「去幸福路步行街 / 有座不拥挤 / 打车」→「帮我预约车辆 / 通勤高峰… / AI叫车」
+     * →「预约顺风车，一口价超便宜 / 去预约」… 盯文案永远追不上。
+     *
+     * 但它三张卡的**版式一模一样**（真机 uiautomator 实测）：
+     *   标题  [185,2093] w≈580~617 h=55
+     *   副标  [185,2161] w=150~179 h=39   （两个 chip）
+     *   按钮  [845,2130] w=112 h=47       （右侧药丸）
+     * 也就是：**整屏宽 + 高 180~320 + 一个长标题 + 一个短按钮**。
+     *
+     * 两条护栏防止误伤：
+     *  · 宫格 item 是 1080x508，高度直接出界；
+     *  · 「我的」页那些整屏宽的行（车辆服务 / 达人任务…）里必有 MY_* 文案，一律排除。
+     */
+    private static boolean isPromoSlotItem(View item) {
+        int w = item.getWidth(), h = item.getHeight();
+        if (w <= 0 || h <= 0) return false;
+        if (h < 180 || h > 320) return false;
+        View root = item;
+        ViewParent p;
+        while ((p = root.getParent()) instanceof View) root = (View) p;
+        int sw = root.getWidth() > 0 ? root.getWidth() : 1080;
+        if (w < sw * 90 / 100) return false;
+        // 必须本身就是列表 item（父级是 AjxList2 / RecyclerView），不是卡片里的某层内胆
+        ViewParent pp = item.getParent();
+        if (!(pp instanceof View) || !isList((View) pp)) return false;
+
+        boolean[] f = new boolean[3];       // [0]=长标题 [1]=短按钮 [2]=我的页文案
+        scanPromo(item, f, 0);
+        return f[0] && f[1] && !f[2];
+    }
+
+    /**
+     * 扫一遍 item 子树，收集三个标志位。
+     *
+     * 注意：这里**直接读视图上的文案**（AJX 的 Label 把文字挂在 contentDescription 上），
+     * 不查 anchors 索引 —— 因为索引里只有"被规则认领过"的文案，
+     * 而这张卡的标题本来就是新面孔，等它进索引等于永远等不到。
+     */
+    private static void scanPromo(View v, boolean[] f, int depth) {
+        if (v == null || depth > 16) return;
+        String t = textOfView(v);
+        if (t != null) {
+            if (t.length() >= 5) f[0] = true;
+            else if (t.length() >= 2 && !HOME_CHIPS_LABELS.contains(t)) f[1] = true;
+            if (MY_ORDER.contains(t) || MY_SERVICE.contains(t) || MY_TASK.contains(t)
+                    || MY_PROMO.contains(t) || MY_QUALITY_WORDS.contains(t)) f[2] = true;
+            // 天气 / 限行卡也是整屏宽、也有长文案 + 短文案，形状撞得上 —— 单独排除掉
+            if (isTempLabel(t) || t.contains("天气") || t.contains("限行")
+                    || t.contains("气温") || t.contains("降雨")) f[2] = true;
+        }
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) scanPromo(g.getChildAt(i), f, depth + 1);
+        }
+    }
+
+    /** 取一个视图当前显示的短文案（AJX Label 走 contentDescription，原生走 TextView） */
+    private static String textOfView(View v) {
+        try {
+            CharSequence cd = v.getContentDescription();
+            if (cd != null && cd.length() > 0 && cd.length() <= 24) return cd.toString();
+            if (v instanceof TextView) {
+                CharSequence tx = ((TextView) v).getText();
+                if (tx != null && tx.length() > 0 && tx.length() <= 24) return tx.toString();
+            }
+        } catch (Throwable ignored) {}
+        return null;
+    }
+
+    /** 布局稳定后再找一遍运营推广卡（绑定那一刻几何还是 0x0，判不了） */
+    private static void applyPromoSlot(View decor) {
+        if (cfgOn(Config.K_QUICK_CARD)) return;
+        View hit = findPromoItem(decor, 0);
+        if (hit == null || hiddenWhy.containsKey(hit)) return;
+        hideItem(hit, Config.K_QUICK_CARD);
+        H.log(Log.INFO, MainHook.TAG, "PROMO-HIDE " + shortName(hit) + " " + geom(hit));
+    }
+
+    /** 先序查找：命中的是**最外层**那个符合条件的列表 item */
+    private static View findPromoItem(View v, int depth) {
+        if (v == null || depth > 24) return null;
+        if (isPromoSlotItem(v)) return v;
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) {
+                View r = findPromoItem(g.getChildAt(i), depth + 1);
+                if (r != null) return r;
+            }
+        }
+        return null;
+    }
+
     /** 判定一个 item 该不该收：先锚点文本，再不济按结构认「内容流帖子卡」 */
     private static String ruleForItem(View item) {
+        // 0) 结构优先：首页那个「运营推广卡」槽位
+        if (isPromoSlotItem(item)) return Config.K_QUICK_CARD;
+
         List<View> stack = new ArrayList<>();
         stack.add(item);
         String hitRule = null;
@@ -1077,15 +1533,87 @@ public final class HomeTweaks {
         return null;
     }
 
+    /**
+     * 「设置家 / 设置单位 / 常去地点」那一排的专用处理：
+     * 只把**这一排**收掉（最小、且子树里挂着 >=2 个 chips 文案的祖先），
+     * 绝不收它所在的整个列表 item。返回 true = 已经处理完，调用方别再动 item。
+     */
+    private static boolean hideChipsRowOnly(View anchor, String rule) {
+        if (!Config.K_HOME_CHIPS.equals(rule)) return false;
+        View row = smallestWithLabels(anchor, HOME_CHIPS_LABELS, 2);
+        if (row == null || row == anchor) return false;
+        if (hiddenWhy.containsKey(row)) return true;
+        if (row.getVisibility() != View.GONE) row.setVisibility(View.GONE);
+        ViewGroup.LayoutParams lp = row.getLayoutParams();
+        if (lp != null && lp.height != 0 && row.getHeight() > 0) {
+            lp.height = 0;
+            row.setLayoutParams(lp);
+        }
+        hiddenItems.add(new java.lang.ref.WeakReference<>(row));
+        hiddenWhy.put(row, rule);
+        H.log(Log.INFO, MainHook.TAG, "CHIPS-HIDE " + shortName(row) + " " + geom(row));
+        return true;
+    }
+
+    /** 在 item 子树里找一个 chips 锚点，按上面那条护栏处理 */
+    private static boolean chipsRowOnlyInItem(View item, String rule) {
+        if (!Config.K_HOME_CHIPS.equals(rule)) return false;
+        List<View> stack = new ArrayList<>();
+        stack.add(item);
+        int guard = 0;
+        while (!stack.isEmpty() && guard++ < 400) {
+            View v = stack.remove(stack.size() - 1);
+            String text;
+            synchronized (LOCK) { text = anchors.get(v); }
+            if (text != null && HOME_CHIPS_LABELS.contains(text) && hideChipsRowOnly(v, rule)) return true;
+            if (v instanceof ViewGroup) {
+                ViewGroup g = (ViewGroup) v;
+                for (int i = 0; i < g.getChildCount(); i++) stack.add(g.getChildAt(i));
+            }
+        }
+        return false;
+    }
+
+    /** 从锚点往上找最小的、子树里挂着 >=min 个指定文案的祖先 */
+    private static View smallestWithLabels(View anchor, Set<String> labels, int min) {
+        View cur = anchor;
+        for (int i = 0; i < 8 && cur.getParent() instanceof View; i++) {
+            View p = (View) cur.getParent();
+            Set<String> found = new HashSet<>();
+            countLabels(p, labels, found, 0);
+            if (found.size() >= min) return p;
+            cur = p;
+        }
+        return null;
+    }
+
+    private static void countLabels(View v, Set<String> labels, Set<String> found, int depth) {
+        if (v == null || depth > 14 || found.size() >= 6) return;
+        synchronized (LOCK) {
+            String t = anchors.get(v);
+            if (t != null && labels.contains(t)) found.add(t);
+        }
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) countLabels(g.getChildAt(i), labels, found, depth + 1);
+        }
+    }
+
+    /** 把一个已经判定要收的节点重新按成 GONE + height 0（AJX 复活它时立刻叫用） */
+    private static void reapplyHidden(View item) {
+        // 只 GONE，**不再写 lp.height = 0**。
+        // 真机实证：AJX 会在重绑时把 itemView 重新 setVisibility(VISIBLE)，
+        // 但保留我们写的 height=0 —— 那张卡就变成"半张、文字被切"的残片
+        // （用户截图里那张「去幸福路步行街」）。GONE 的节点根本不会绘制，
+        // 从机制上就不可能产生这种残片；留白比残片好得多。
+        if (item.getVisibility() != View.GONE) item.setVisibility(View.GONE);
+    }
+
     /** 真正把条目收掉 */
     private static void hideItem(View item, String rule) {
         if (hiddenWhy.containsKey(item)) return;
         if (item.getVisibility() != View.GONE) item.setVisibility(View.GONE);
-        ViewGroup.LayoutParams lp = item.getLayoutParams();
-        if (lp != null && lp.height != 0 && item.getHeight() > 0) {
-            lp.height = 0;
-            item.setLayoutParams(lp);
-        }
+        // 不写 height：写了会留下"半张卡"的残片，见 reapplyHidden 注释
         hiddenItems.add(new java.lang.ref.WeakReference<>(item));
         hiddenWhy.put(item, rule);
         if (loggedOnce.add("bind_" + System.identityHashCode(item))) {
@@ -1120,6 +1648,8 @@ public final class HomeTweaks {
      */
     private static String ruleFor(String t, View v) {
         if (HOME_CHIPS_LABELS.contains(t)) return Config.K_HOME_CHIPS;
+        if (isQuickCardAnchor(v, t)) return Config.K_QUICK_CARD;
+        if (isTaxiCta(t) && !isToolGridCell(v)) return Config.K_QUICK_CARD;
 
         if (MY_ORDER.contains(t)) return Config.K_MY_ORDER_ROW;
         if (MY_SERVICE.contains(t)) return Config.K_MY_SERVICE_ROW;
@@ -1144,6 +1674,53 @@ public final class HomeTweaks {
         if (containsAny(t, ANCHOR_RANK)) return Config.K_FEED_RANK;
         if (containsAny(t, ANCHOR_CONTENT)) return Config.K_FEED_CONTENT;
         return null;
+    }
+
+    /**
+     * 是不是首页那张「去XX」快捷打车卡的标题。
+     *
+     * 判据（两条都要满足）：
+     *  1) 文案以「去」开头、长度 2~16、不是工具键也不是 chips 键；
+     *  2) 往上 8 层之内能找到挂着 QUICK_CARD_HINTS 里任意一条旁证的小块。
+     * 第 2 条是关键护栏 —— 信息流里的「去扫描」之类没有旁证，不会被误判。
+     */
+    private static boolean isQuickCardAnchor(View v, String t) {
+        if (isSelfEvidentQuickCard(t)) return true;
+        return looksLikeQuickCardTitle(t) && smallestWithLabels(v, QUICK_CARD_HINTS, 1) != null;
+    }
+
+    /**
+     * 打车推广卡的**行动按钮**文案。
+     *
+     * 为什么最后改成盯按钮而不是盯标题：那个槽位是轮播位，标题一天能换好几张
+     * （「去幸福路步行街」→「帮我预约车辆」→「帮我叫一辆空气清新的车」…），
+     * 但按钮永远是"打车 / 去打车 / AI叫车 / 立即叫车"这一族。盯住按钮才拦得稳。
+     * 宫格里的「打车」是工具键，在调用前就分流掉了，不会走到这里。
+     */
+    private static boolean isTaxiCta(String t) {
+        if (t == null || t.length() < 2 || t.length() > 8) return false;
+        if (TOOL_ALIAS.containsKey(t)) return false;
+        return t.contains("打车") || t.contains("叫车");
+    }
+
+    /** 这个锚点是不是落在工具宫格的格子里（是的话就轮不到推广卡规则） */
+    private static boolean isToolGridCell(View v) {
+        View cell = ascendSmallCell(v);
+        return cell != null && looksLikeToolCell(cell);
+    }
+
+    /** 文案自己就能说明它是那张卡（长且独特，contains 也不会误伤） */
+    private static boolean isSelfEvidentQuickCard(String t) {
+        if (t == null || t.length() < 3) return false;
+        for (String s : QUICK_CARD_SELF) if (t.contains(s)) return true;
+        return false;
+    }
+
+    /** 只按文案形状判：以「去」开头、长度 2~16、既不是工具键也不是 chips 键 */
+    private static boolean looksLikeQuickCardTitle(String t) {
+        if (t == null || t.length() < 2 || t.length() > 16) return false;
+        if (t.charAt(0) != '去') return false;
+        return !HOME_CHIPS_LABELS.contains(t) && !TOOL_ALIAS.containsKey(t);
     }
 
     /** 归一：去掉首尾空白与 `- · | ——` 等装饰字符，避免精确匹配被装饰字符废掉。 */

@@ -1,6 +1,15 @@
 package io.github.ldxm666.mapadkiller;
 
 import android.app.Application;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.content.ComponentName;
+import android.content.Context;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.os.Build;
 
 import io.github.libxposed.service.XposedService;
 import io.github.libxposed.service.XposedServiceHelper;
@@ -80,6 +89,9 @@ public final class App extends Application implements XposedServiceHelper.OnServ
     @Override
     public void onCreate() {
         super.onCreate();
+        // 冷启动先按本地（可能过期的）默认值摆正图标，等服务绑上再按真实配置纠正一次，
+        // 免得用户装了新版本、配置在 LSPosed 库里而图标状态却是进程内存里的"没做过"。
+        try { applyIconVisibility(this, false, false); } catch (Throwable ignored) {}
         try {
             XposedServiceHelper.registerListener(this);
         } catch (Throwable ignored) {}
@@ -90,6 +102,104 @@ public final class App extends Application implements XposedServiceHelper.OnServ
         service = s;
         flushPending();          // 补写服务没连上时收到的学习结果
         try { LearnedProvider.flushToRemote(getApplicationContext()); } catch (Throwable ignored) {}
+        // 真实配置到手，把桌面图标状态摆正
+        try { syncIconFromConfig(getApplicationContext()); } catch (Throwable ignored) {}
+    }
+
+    // ────────────────────────────────────────────────── 桌面图标开关
+
+    /** launcher 别名组件（manifest 里的 activity-alias），图标开关就是切它的 enabled */
+    public static final String LAUNCHER_ALIAS = Config.PKG + ".LauncherAlias";
+
+    private static final String CH_ID = "mapadkiller_entry";
+    private static final int NOTI_ID = 0x4DA1;
+
+    /** 从 RemotePreferences 读配置再摆正图标（服务绑上后调用） */
+    public static void syncIconFromConfig(Context ctx) {
+        boolean hide = false;
+        try {
+            XposedService s = service;
+            if (s != null) {
+                hide = s.getRemotePreferences(Config.PREF_GROUP)
+                        .getBoolean(Config.K_HIDE_ICON, false);
+            }
+        } catch (Throwable ignored) {}
+        applyIconVisibility(ctx, hide, true);
+    }
+
+    /**
+     * 切换桌面图标可见性。
+     *
+     * 隐藏时挂一条常驻通知当"回家的路" —— 这是本模块唯一能保证用户还进得来设置页的手段，
+     * 因为图标一旦被禁掉，桌面和 LSPosed 管理器的"打开"都找不到了。
+     * 手动兜底：adb shell am start -n io.github.ldxm666.mapadkiller/.MainActivity
+     */
+    public static void applyIconVisibility(Context ctx, boolean hide, boolean notify) {
+        try {
+            PackageManager pm = ctx.getPackageManager();
+            ComponentName cn = new ComponentName(ctx.getPackageName(), LAUNCHER_ALIAS);
+            pm.setComponentEnabledSetting(cn,
+                    hide ? PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+                         : PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+                    PackageManager.DONT_KILL_APP);
+        } catch (Throwable ignored) {}
+        if (!notify) return;
+        try {
+            if (hide) postEntryNotification(ctx);
+            else cancelEntryNotification(ctx);
+        } catch (Throwable ignored) {}
+    }
+
+    /** 通知权限请求码（设置页 onRequestPermissionsResult 用同一个值） */
+    public static final int REQ_NOTIFY = 0x4DA2;
+
+    /**
+     * 申请通知权限（Android 13+ 才有这个运行时权限）。
+     * 只在 Activity 上调用；拿不到就返回，由调用方照常执行隐藏动作。
+     */
+    public static void ensureNotificationPermission(android.app.Activity act) {
+        try {
+            if (Build.VERSION.SDK_INT < 33) return;   // 13 之前没有这个运行时权限
+            if (act.checkSelfPermission("android.permission.POST_NOTIFICATIONS")
+                    == PackageManager.PERMISSION_GRANTED) return;
+            act.requestPermissions(
+                    new String[]{"android.permission.POST_NOTIFICATIONS"}, REQ_NOTIFY);
+        } catch (Throwable ignored) {}
+    }
+
+    // minSdkVersion=26，所以通知渠道/构造器全部按 8.0 的写法来，不碰已过时 API
+    // （javac 往 stderr 打一条 deprecation 注，build.ps1 的 Stop 就会当成构建失败）
+    private static void postEntryNotification(Context ctx) {
+        NotificationManager nm =
+                (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (nm == null) return;
+        NotificationChannel ch = new NotificationChannel(
+                CH_ID, "模块入口", NotificationManager.IMPORTANCE_LOW);
+        ch.setShowBadge(false);
+        nm.createNotificationChannel(ch);
+
+        Intent it = new Intent(ctx, MainActivity.class);
+        it.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        PendingIntent pi = PendingIntent.getActivity(ctx, 0, it,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+        Notification n = new Notification.Builder(ctx, CH_ID)
+                .setSmallIcon(android.R.drawable.ic_menu_mylocation)
+                .setContentTitle("MapAdKiller 正在运行")
+                .setContentText("桌面图标已隐藏 · 点按回到设置页")
+                .setContentIntent(pi)
+                .setOngoing(true)
+                .setShowWhen(false)
+                .build();
+        nm.notify(NOTI_ID, n);
+    }
+
+    private static void cancelEntryNotification(Context ctx) {
+        try {
+            NotificationManager nm =
+                    (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm != null) nm.cancel(NOTI_ID);
+        } catch (Throwable ignored) {}
     }
 
     @Override
