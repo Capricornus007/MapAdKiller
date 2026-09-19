@@ -158,8 +158,18 @@ public final class MainActivity extends Activity {
         // ---- 腾讯 · 首页（键名带 tmap_ 前缀，与高德/百度各自独立）----
         beginSection(root, "腾讯 · 首页", "tmap");
         for (String tab : Config.TMAP_TABS)
-            addSwitch("显示底部标签「" + tab + "」", Config.K_TMAP_TAB_PREFIX + tab);
+            addTabSwitch("显示底部标签「" + tab + "」", Config.K_TMAP_TAB_PREFIX + tab);
         addSwitch("「大家都在看」推荐流", Config.K_TMAP_FEED_HOT);
+        addCycleRow("底部选中色块", Config.K_TMAP_BLOB_MODE,
+                new String[]{"关", "半透明", "原样"},
+                new int[]{Config.BLOB_OFF, Config.BLOB_FADE, Config.BLOB_FULL},
+                Config.tmapBlobMode());
+        endSection(root);
+
+        // ---- 腾讯 · 我的页（Kuikly 自绘分区，能藏但较脆，改版可能要再修）----
+        beginSection(root, "腾讯 · 我的页", "tmap_mine");
+        for (String sec : Config.TMAP_MINE_SECTIONS)
+            addSwitch("显示「" + sec + "」", Config.K_TMAP_MINE_PREFIX + sec);
         endSection(root);
 
         // ---- 其他 ----
@@ -480,6 +490,67 @@ public final class MainActivity extends Activity {
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         currentCard.addView(row, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+    }
+
+    /** 底部标签开关：带「至少留一个」保护——关到 0 个时把这一格开回来并提示。
+     *  用界面 Switch 状态计数（设置进程里 Config.tmapVisibleTabCount 走的是 hook 侧 H.module，取不到真值）。 */
+    private void addTabSwitch(final String title, final String key) {
+        addSwitch(title, key, new OnToggle() {
+            @Override public void changed(boolean value) {
+                if (value) return;
+                int on = 0;
+                for (String t : Config.TMAP_TABS) {
+                    Switch s = switches.get(Config.K_TMAP_TAB_PREFIX + t);
+                    if (s != null && s.isChecked()) on++;
+                }
+                if (on == 0) {
+                    App.writeBoolean(key, true);
+                    Switch s = switches.get(key);
+                    if (s != null) s.setChecked(true);
+                    Toast.makeText(MainActivity.this, "至少保留一个底部标签", Toast.LENGTH_SHORT).show();
+                }
+            }
+        });
+    }
+
+    /** 循环选择行：点一下切到下一个选项，写入 int 值，右侧显示当前值。 */
+    private void addCycleRow(final String title, final String key,
+                             final String[] options, final int[] values, final int current) {
+        if (currentCard.getChildCount() > 0) {
+            View divider = new View(this);
+            divider.setBackgroundColor(DIVIDER);
+            currentCard.addView(divider, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, dp(1))));
+        }
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setMinimumHeight(dp(52));
+        row.setPadding(0, dp(12), 0, dp(12));
+        TextView label = text(title, 15, Typeface.NORMAL, TX_PRIMARY);
+        row.addView(label, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        final int[] idx = { indexOfValue(values, current) };
+        final TextView val = text(options[idx[0]], 15, Typeface.NORMAL, TX_ACCENT);
+        row.addView(val, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        row.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                int n = (idx[0] + 1) % options.length;
+                if (App.writeInt(key, values[n])) {
+                    idx[0] = n;
+                    val.setText(options[n]);
+                } else {
+                    Toast.makeText(MainActivity.this, "LSPosed 服务未连接，请稍后重试", Toast.LENGTH_SHORT).show();
+                }
+            }
+        });
+        currentCard.addView(row, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+    }
+
+    private static int indexOfValue(int[] values, int v) {
+        for (int i = 0; i < values.length; i++) if (values[i] == v) return i;
+        return 0;
     }
 
     private boolean readState(String key) {

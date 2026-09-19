@@ -120,6 +120,29 @@ public final class Config {
         try { return prefs().getBoolean(K_TMAP_FEED_HOT, def); } catch (Throwable t) { return def; }
     }
 
+    /** 底部选中「液态色块」不透明度模式：0=关（不画）1=半透明 2=原样。默认关（用户要求去掉色块）。 */
+    public static final String K_TMAP_BLOB_MODE = "tmap_blob_mode";
+    public static final int BLOB_OFF = 0, BLOB_FADE = 1, BLOB_FULL = 2;
+    public static int tmapBlobMode() {
+        try { return prefs().getInt(K_TMAP_BLOB_MODE, BLOB_OFF); } catch (Throwable t) { return BLOB_OFF; }
+    }
+
+    /** 「我的」页可开关的分区（键名 = "tmap_mine_" + 分区名，默认显示） */
+    public static final String K_TMAP_MINE_PREFIX = "tmap_mine_";
+    public static final String[] TMAP_MINE_SECTIONS = {
+            "积分中心", "个性化设置", "我的小程序", "我的车辆", "活动专区",
+    };
+    public static boolean tmapMineVisible(String section) {
+        try { return prefs().getBoolean(K_TMAP_MINE_PREFIX + section, true); } catch (Throwable t) { return true; }
+    }
+
+    /** 当前要显示的底部标签数（用于「至少留一个」保护） */
+    public static int tmapVisibleTabCount() {
+        int n = 0;
+        for (String t : TMAP_TABS) if (tmapTabVisible(t)) n++;
+        return n;
+    }
+
     /** 首页工具清单（键名 = "tool_" + 标签文本，与首页文本锚点一致） */
     public static final String[] TOOLS = {
             "驾车", "公交地铁", "租车", "打车", "订酒店",

@@ -38,6 +38,17 @@ public final class App extends Application implements XposedServiceHelper.OnServ
         }
     }
 
+    public static boolean writeInt(String key, int value) {
+        XposedService s = service;
+        if (s == null) return false;
+        try {
+            return s.getRemotePreferences(Config.PREF_GROUP)
+                    .edit().putInt(key, value).commit();
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
     /** 恢复默认：清空全部配置键（全部显示） */
     public static boolean clearAll() {
         XposedService s = service;

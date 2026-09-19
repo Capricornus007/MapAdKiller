@@ -36,8 +36,7 @@ public final class TmapHomeTweaks {
 
     private static WeakReference<ViewGroup> tabRowRef;
 
-    /** true = 正在隐藏标签 → 跳过液态色块的 onDraw；4 格全显时保留原生高亮。 */
-    private static volatile boolean blobOff;
+    /** 液态色块 onDraw hook 只挂一次。 */
     private static volatile boolean liquidHooked;
 
     public static void install(ClassLoader cl) {
@@ -77,6 +76,7 @@ public final class TmapHomeTweaks {
             Resources res = act.getResources();
             applyTabs(decor, res);
             applyFeedHot(decor, res);
+            applyMine(decor, res);
             hookScroll(decor, res);   // 大家都在看 是滚动才懒渲染，挂个节流滚动回调
         } catch (Throwable t) {
             H.log(Log.WARN, MainHook.TAG, "tmap_home apply err " + t);
@@ -137,6 +137,7 @@ public final class TmapHomeTweaks {
                             try {
                                 applyTabs(decor, res);
                                 applyFeedHot(decor, res);
+                                applyMine(decor, res);
                             } catch (Throwable ignored) {}
                         }
                     });
@@ -167,11 +168,14 @@ public final class TmapHomeTweaks {
         if (row == null || row.getChildCount() < 2) return;
 
         // 先数要藏几格，决定「缩栏居中」还是「恢复原样」
+        // 「至少留一个」保护：若用户把四个都关了，强制显示「首页」，避免底栏缩成空的。
+        final boolean forceHome = Config.tmapVisibleTabCount() == 0;
         int hiddenN = 0, visibleN = 0;
         for (int i = 0; i < row.getChildCount(); i++) {
             String label = tabLabel(row.getChildAt(i), res);
             if (label == null) continue;
-            if (Config.tmapTabVisible(label)) visibleN++; else hiddenN++;
+            boolean vis = Config.tmapTabVisible(label) || (forceHome && "首页".equals(label));
+            if (vis) visibleN++; else hiddenN++;
         }
         boolean shrink = hiddenN > 0;
         // 缩栏时每个保留标签给一个「正常标签宽度」（约等于原来 4 等分的一格），
@@ -183,7 +187,7 @@ public final class TmapHomeTweaks {
             View cell = row.getChildAt(i);
             String label = tabLabel(cell, res);
             if (label == null) continue;
-            boolean vis = Config.tmapTabVisible(label);
+            boolean vis = Config.tmapTabVisible(label) || (forceHome && "首页".equals(label));
 
             if (cell.getVisibility() != View.VISIBLE) { cell.setVisibility(View.VISIBLE); changed = true; }
 
@@ -215,7 +219,6 @@ public final class TmapHomeTweaks {
         }
         if (shrink && logged.add("tmap_tab_done"))
             H.log(Log.INFO, MainHook.TAG, "TMAP-TAB 缩栏居中 可见" + visibleN + " 隐藏" + hiddenN);
-        blobOff = shrink;   // 只有真正藏了标签时才关掉那个液态色块（4 格全显时保留原生高亮）
     }
 
     /** 用 group 实例自己的 Class 挂 onDraw hook，跳过即去掉液态色块；只挂一次。 */
@@ -229,8 +232,13 @@ public final class TmapHomeTweaks {
               .setExceptionMode(io.github.libxposed.api.XposedInterface.ExceptionMode.DEFAULT)
               .intercept(new io.github.libxposed.api.XposedInterface.Hooker() {
                   @Override public Object intercept(io.github.libxposed.api.XposedInterface.Chain chain) throws Throwable {
-                      if (blobOff) return null;   // 跳过原生 onDraw → 不画色块
-                      return chain.proceed();
+                      int mode = Config.tmapBlobMode();
+                      if (mode == Config.BLOB_OFF) return null;             // 不画
+                      if (mode == Config.BLOB_FULL) return chain.proceed(); // 原样
+                      // 半透明：只给色块这一层降 alpha（图标/文字是子 View，走 dispatchDraw 不受影响）
+                      android.graphics.Canvas c = (android.graphics.Canvas) chain.getArg(0);
+                      int saved = c.saveLayerAlpha((android.graphics.RectF) null, 110);
+                      try { return chain.proceed(); } finally { c.restoreToCount(saved); }
                   }
               });
             H.log(Log.INFO, MainHook.TAG, "tmap liquid hook on " + group.getClass().getName());
@@ -259,6 +267,47 @@ public final class TmapHomeTweaks {
         }
         if (ch) v.setLayoutParams(lp);
         return ch;
+    }
+
+    // --------------------------------------------------------- 我的页分区
+
+    /**
+     * 「我的」页的分区（积分中心 / 个性化设置 / …）是 Kuikly 自绘（KRView），
+     * 只能按标题文字定位、再上溯找「整块分区」容器隐藏。天生脆弱：改版可能失效、
+     * Kuikly 可能重绘回来，所以在 onResume + 滚动时反复补做。仅在「我的」页动手。
+     */
+    private static void applyMine(View root, Resources res) {
+        int screenW = res.getDisplayMetrics().widthPixels;
+        for (String sec : Config.TMAP_MINE_SECTIONS) {
+            if (Config.tmapMineVisible(sec)) continue;
+            View title = findViewByText(root, sec, 0);
+            if (title == null) continue;
+            View cont = sectionContainer(title, screenW);
+            if (cont == null || cont.getVisibility() == View.GONE) continue;
+            cont.setVisibility(View.GONE);
+            if (logged.add("mine_" + sec))
+                H.log(Log.INFO, MainHook.TAG, "TMAP-MINE-HIDE " + sec
+                        + " cont=" + cont.getClass().getSimpleName()
+                        + " w=" + cont.getWidth() + " h=" + cont.getHeight());
+            ViewParent p = cont.getParent();
+            if (p instanceof View) p.requestLayout();
+        }
+    }
+
+    /** 从标题往上找第一个「全宽、且明显比标题行高」的祖先 = 整块分区容器（跳过标题自身那层）。 */
+    private static View sectionContainer(View title, int screenW) {
+        ViewParent pp = title.getParent();
+        View cur = (pp instanceof View) ? (View) pp : null;   // 从标题的父级往上找，避免只藏标题
+        int minH = Math.max(title.getHeight() * 2, 160);
+        int guard = 0;
+        while (cur != null && guard++ < 14) {
+            int w = cur.getWidth(), h = cur.getHeight();
+            if (w >= screenW * 0.85f && h >= minH) return cur;
+            ViewParent p = cur.getParent();
+            if (!(p instanceof View)) break;
+            cur = (View) p;
+        }
+        return null;
     }
 
     /**
