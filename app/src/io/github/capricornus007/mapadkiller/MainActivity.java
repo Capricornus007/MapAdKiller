@@ -1,7 +1,6 @@
 package io.github.capricornus007.mapadkiller;
 
 import android.app.Activity;
-import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
@@ -15,10 +14,15 @@ import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.util.LinkedHashMap;
+
 /**
- * 设置页：分类卡片 + 统一规格开关行（52dp 行高、右侧 Switch、行间细分隔线）。
- * 配置写入 LSPosed RemotePreferences（App 侧经 libxposed/service，
- * Hook 侧经 XposedModule#getRemotePreferences，同名 group 双侧共享）。
+ * 设置页：Material 3 手风琴分组（参考 XposedSmsCode 的「設定」页）。
+ *  顶部：主開關（整体启停 UI 自定义）+ 手風琴模式（分组可折叠 / 全部直接展开）。
+ *  下面每个分区是一个可折叠卡片：点标题展开/收起；关掉手风琴模式则全部平铺。
+ * 配置写入 LSPosed RemotePreferences（App 侧经 libxposed/service，Hook 侧经
+ *  XposedModule#getRemotePreferences，同名 group 双侧共享）。折叠状态是本机 UI 偏好，
+ *  存普通 SharedPreferences 即可，不进 RemotePreferences。
  */
 public final class MainActivity extends Activity {
 
@@ -26,6 +30,9 @@ public final class MainActivity extends Activity {
     private TextView statusView;
     /** 「已捕获广告 SDK」那一行；服务绑定后要重刷文案，否则一直显示 onCreate 时的空快照 */
     private TextView sdkRow;
+
+    private boolean accordion;                                  // 当前是否手风琴模式
+    private final LinkedHashMap<String, View[]> sections = new LinkedHashMap<>();  // id -> {header, chevron, body}
 
     private static final int BG_PAGE = 0xFFF2F3F7;
     private static final int BG_CARD = 0xFFFFFFFF;
@@ -58,40 +65,50 @@ public final class MainActivity extends Activity {
         root.addView(statusView);
         renderStatus();
 
-        // ---- 去广告 ----
-        root.addView(sectionHeader("去广告 · 高德 / 百度 / 腾讯"));
+        // ---- 顶部：主開關 + 手風琴模式 ----
+        accordion = readUi("accordion_mode", true);
         beginCard();
-        addNoteRow("开屏 / 横幅 / 推送 / 信息流广告卡拦截，覆盖高德、百度、腾讯三家地图（始终开启，无需配置）");
+        addSwitch("主開關（模块 UI 自定义总开关）", Config.K_MASTER, new OnToggle() {
+            @Override public void changed(boolean value) {
+                Toast.makeText(MainActivity.this,
+                        value ? "已开启：强停地图后重新打开生效"
+                              : "已关闭：强停地图后重新打开，恢复地图原生界面",
+                        Toast.LENGTH_LONG).show();
+            }
+        });
+        addSwitch("手風琴模式（分组可折叠）", null, new OnToggle() {
+            @Override public void changed(boolean value) {
+                accordion = value;
+                writeUi("accordion_mode", value);
+                applyAllSections();
+            }
+        }, accordion);   // 初始态用手风琴模式当前值
+        endCard(root);
+
+        // ---- 去广告 ----
+        beginSection(root, "去广告 · 高德 / 百度 / 腾讯", "ads");
+        addNoteRow("开屏 / 横幅 / 推送 / 信息流广告卡拦截，覆盖高德、百度、腾讯三家地图（始终开启，不受主开关影响）");
         addNoteRow("广告 SDK 自动检索：打开地图时模块会在其进程内扫描 dex，命中广告特征的厂商包"
                 + "会自动记下来并拦截，记录长期保存，下次启动直接生效。");
         sdkRow = addActionButton(sdkSummary(), new Runnable() {
-            @Override public void run() {
-                showLearnedSdks();
-            }
+            @Override public void run() { showLearnedSdks(); }
         });
-        endCard(root);
+        endSection(root);
 
-        // ---- 主页标签栏 ----
-        root.addView(sectionHeader("高德 · 主页标签栏"));
-        beginCard();
+        // ---- 高德 · 主页标签栏 ----
+        beginSection(root, "高德 · 主页标签栏", "amap_tab");
         for (String tab : Config.TABS) addSwitch("显示标签「" + tab + "」", Config.K_TAB_PREFIX + tab);
-        endCard(root);
+        endSection(root);
 
-        // ---- 首页工具 ----
-        root.addView(sectionHeader("高德 · 首页工具宫格"));
-        beginCard();
+        // ---- 高德 · 首页工具 ----
+        beginSection(root, "高德 · 首页工具宫格", "amap_tool");
         for (String tool : Config.TOOLS) addSwitch("显示「" + tool + "」", Config.K_TOOL_PREFIX + tool);
-        addSwitch("显示扩展工具页（景点游玩 / 离线地图 / 通行费助手 / 旅游度假）",
-                Config.K_TOOL_EXTRA);
-        // 收藏夹从扩展工具页里拆出来，单独一个开关。
-        // 它以前被并进「更多工具」的别名，受「扩展工具页」和「更多工具」双重夹击，
-        // 用户怎么点都是隐藏的，所以给一条自己的行。
+        addSwitch("显示扩展工具页（景点游玩 / 离线地图 / 通行费助手 / 旅游度假）", Config.K_TOOL_EXTRA);
         addSwitch("显示「收藏夹」", Config.K_TOOL_FAVORITE);
-        endCard(root);
+        endSection(root);
 
-        // ---- 首页推荐内容 ----
-        root.addView(sectionHeader("高德 · 首页推荐内容"));
-        beginCard();
+        // ---- 高德 · 首页推荐内容 ----
+        beginSection(root, "高德 · 首页推荐内容", "amap_feed");
         addSwitch("天气卡片", Config.K_FEED_WEATHER);
         addSwitch("周边景区 / 景点推荐", Config.K_FEED_SCENIC);
         addSwitch("榜单帖子卡（景区榜 / 美食榜 / 打卡地…）", Config.K_FEED_POSTS);
@@ -102,43 +119,36 @@ public final class MainActivity extends Activity {
         addSwitch("推荐频道栏（关注 / 附近 / 美食…）", Config.K_FEED_FILTER);
         addSwitch("设置家 / 设置单位 / 常去地点", Config.K_HOME_CHIPS);
         addSwitch("智能出行推广卡（去XX / 帮我预约车辆 / AI叫车）", Config.K_QUICK_CARD);
-        endCard(root);
+        endSection(root);
 
-        // ---- 搜索页 ----
-        root.addView(sectionHeader("高德 · 搜索页"));
-        beginCard();
-        addSwitch("显示搜索页「美食 / 酒店 / 加油站 / 休闲玩乐 / 扫街榜」那一排",
-                Config.K_SEARCH_CATS);
-        endCard(root);
+        // ---- 高德 · 搜索页 ----
+        beginSection(root, "高德 · 搜索页", "amap_search");
+        addSwitch("显示搜索页「美食 / 酒店 / 加油站 / 休闲玩乐 / 扫街榜」那一排", Config.K_SEARCH_CATS);
+        endSection(root);
 
-        // ---- 「我的」页 ----
-        root.addView(sectionHeader("高德 · 「我的」页"));
-        beginCard();
+        // ---- 高德 · 「我的」页 ----
+        beginSection(root, "高德 · 「我的」页", "amap_my");
         addSwitch("订单 / 收藏 / 待评价 一栏", Config.K_MY_ORDER_ROW);
         addSwitch("车辆服务 / 高德运动 一栏", Config.K_MY_SERVICE_ROW);
         addSwitch("达人任务卡片", Config.K_MY_TASK);
         addSwitch("扫街新发现 / 小德果园 一栏", Config.K_MY_PROMO_ROW);
         addSwitch("猜你喜欢", Config.K_MY_GUESS);
         addSwitch("资质信息 / 协议中心", Config.K_MY_QUALITY);
-        endCard(root);
+        endSection(root);
 
         // ---- 腾讯 · 首页（键名带 tmap_ 前缀，与高德/百度各自独立）----
-        root.addView(sectionHeader("腾讯 · 首页"));
-        beginCard();
+        beginSection(root, "腾讯 · 首页", "tmap");
         for (String tab : Config.TMAP_TABS)
             addSwitch("显示底部标签「" + tab + "」", Config.K_TMAP_TAB_PREFIX + tab);
         addSwitch("「大家都在看」推荐流", Config.K_TMAP_FEED_HOT);
-        endCard(root);
+        endSection(root);
 
         // ---- 其他 ----
-        root.addView(sectionHeader("其他"));
-        beginCard();
+        beginSection(root, "其他", "misc");
         addSwitch("调试日志（logcat 输出首页文本锚点）", Config.K_DEBUG_LOG);
         addSwitch("隐藏桌面图标（靠常驻通知回到本页）", Config.K_HIDE_ICON, new OnToggle() {
             @Override public void changed(boolean value) {
                 if (value) {
-                    // 隐藏前先要通知权限：那条常驻通知是"回家的路"，
-                    // 没有它用户就只能靠 adb 才回得来。
                     App.ensureNotificationPermission(MainActivity.this);
                     Toast.makeText(MainActivity.this,
                             "图标已隐藏 · 从通知栏「MapAdKiller 正在运行」可以回到这里",
@@ -152,7 +162,7 @@ public final class MainActivity extends Activity {
         addActionButton("恢复默认（全部显示）", new Runnable() {
             @Override public void run() {
                 if (App.clearAll()) {
-                    App.applyIconVisibility(MainActivity.this, false, true);   // 图标一并还原
+                    App.applyIconVisibility(MainActivity.this, false, true);
                     Toast.makeText(MainActivity.this, "已恢复默认，请强停地图 App 生效", Toast.LENGTH_LONG).show();
                     recreate();
                 } else {
@@ -160,18 +170,84 @@ public final class MainActivity extends Activity {
                 }
             }
         });
-        endCard(root);
+        endSection(root);
 
         TextView tip = text("改动后请强停对应地图 App 并重新打开以生效", 12, Typeface.NORMAL, TX_SECONDARY);
         tip.setPadding(dp(4), dp(14), 0, 0);
         root.addView(tip);
+
+        applyAllSections();   // 按当前模式 + 折叠状态刷新所有分区
     }
+
+    // ══════════════════════════════════════════════════════════ 手风琴分区
+
+    /** 开始一个可折叠分区：加一个可点标题 + 一个卡片正文（正文由后续 addSwitch 填、endSection 收尾）。 */
+    private void beginSection(LinearLayout root, String title, String id) {
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setPadding(dp(6), dp(16), dp(6), dp(8));
+        TextView h = text(title, 15, Typeface.BOLD, TX_ACCENT);
+        header.addView(h, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        TextView chevron = text("▾", 16, Typeface.NORMAL, TX_SECONDARY);
+        header.addView(chevron, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        root.addView(header, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        beginCard();
+        final LinearLayout body = currentCard;
+        header.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                if (!accordion) return;
+                boolean now = !expanded(id);
+                writeUi("exp_" + id, now);
+                applySection(id);
+            }
+        });
+        sections.put(id, new View[]{header, chevron, body});
+    }
+
+    private void endSection(LinearLayout root) { endCard(root); }
+
+    private boolean expanded(String id) { return readUi("exp_" + id, true); }
+
+    private void applySection(String id) {
+        View[] s = sections.get(id);
+        if (s == null) return;
+        TextView chevron = (TextView) s[1];
+        View body = s[2];
+        if (!accordion) {
+            body.setVisibility(View.VISIBLE);
+            chevron.setText("");
+            return;
+        }
+        boolean exp = expanded(id);
+        body.setVisibility(exp ? View.VISIBLE : View.GONE);
+        chevron.setText(exp ? "▾" : "▸");
+    }
+
+    private void applyAllSections() {
+        for (String id : sections.keySet()) applySection(id);
+    }
+
+    // 折叠/模式这类纯 UI 偏好放本机 SharedPreferences，不占用与 Hook 侧共享的 RemotePreferences。
+    private android.content.SharedPreferences uiPrefs() {
+        return getSharedPreferences("ui_state", MODE_PRIVATE);
+    }
+    private boolean readUi(String key, boolean def) {
+        try { return uiPrefs().getBoolean(key, def); } catch (Throwable t) { return def; }
+    }
+    private void writeUi(String key, boolean value) {
+        try { uiPrefs().edit().putBoolean(key, value).apply(); } catch (Throwable ignored) {}
+    }
+
+    // ══════════════════════════════════════════════════════════ 生命周期
 
     @Override
     protected void onResume() {
         super.onResume();
-        synced = false;          // 回到设置页时按存储重刷一遍开关
-        // 服务绑好之后，把收到上报时服务还没就绪而暂存的学习结果补推一次
+        synced = false;
         try { LearnedProvider.flushToRemote(this); } catch (Throwable ignored) {}
         try { App.syncIconFromConfig(this); } catch (Throwable ignored) {}
         refreshSdkRow();
@@ -181,7 +257,6 @@ public final class MainActivity extends Activity {
     @Override
     public void onRequestPermissionsResult(int code, String[] perms, int[] results) {
         super.onRequestPermissionsResult(code, perms, results);
-        // 用户刚授了通知权限：如果图标是隐藏状态，把那条"回家的路"补上
         if (code == App.REQ_NOTIFY && readState(Config.K_HIDE_ICON)) {
             App.applyIconVisibility(this, true, true);
         }
@@ -193,24 +268,13 @@ public final class MainActivity extends Activity {
         statusHandler.removeCallbacks(statusRefresher);
     }
 
-    private static final int DOT_OK = 0xFF12B76A;    // 绿：正常
-    private static final int DOT_BAD = 0xFFE5484D;   // 红：未生效 / 未连接
+    private static final int DOT_OK = 0xFF12B76A;
+    private static final int DOT_BAD = 0xFFE5484D;
 
-    /**
-     * 状态区：两个点各代表一件独立的事，绿=好，红=坏。
-     *  1) 模块是否被 LSPosed 真正加载 —— StatusCheck.amEnabled() 只有被 hook 才会返回 true
-     *     （这是"模块真的在跑"的硬证据，不是猜的）
-     *  2) 配置通道是否连上 LSPosed 服务 —— App.svc() != null
-     * 只有两个点都是绿的，设置页的开关才真正写得进去、hook 才真正生效。
-     */
     private void renderStatus() {
         if (statusView == null) return;
         io.github.libxposed.service.XposedService s = App.svc();
         boolean active = s != null;
-
-        // 作用域：直接问 LSPosed 服务要已勾选的包名列表 —— 这是能真正验证的信号。
-        // （早先用的 StatusCheck.amEnabled() 自检 hook 依赖"模块被注入自己的进程"，
-        //   实测 LSPosed 不会这么做，于是永远 false，明明激活却显示未激活。）
         String[] targets = {MainHook.PKG_AMAP, MainHook.PKG_BMAP, MainHook.PKG_TMAP};
         String[] labels = {"高德", "百度", "腾讯"};
         int scoped = 0;
@@ -228,7 +292,6 @@ public final class MainActivity extends Activity {
             }
         } catch (Throwable ignored) {}
         boolean scopeOk = scoped > 0;
-
         String l1 = active
                 ? "已激活 · " + s.getFrameworkName() + " " + s.getFrameworkVersion()
                 : "未激活 · 请在 LSPosed 中启用本模块";
@@ -236,7 +299,6 @@ public final class MainActivity extends Activity {
         if (!active) l2 = "作用域未知 · 正在等待 LSPosed 服务…";
         else if (scopeOk) l2 = "作用域已勾选 · " + picked + "（" + scoped + "/3）";
         else l2 = "作用域未勾选 · 请在 LSPosed 里勾选地图应用";
-
         String plain = "● " + l1 + "\n● " + l2;
         android.text.SpannableString ss = new android.text.SpannableString(plain);
         int second = plain.indexOf('\n') + 1;
@@ -253,9 +315,6 @@ public final class MainActivity extends Activity {
     private final Runnable statusRefresher = new Runnable() {
         @Override public void run() {
             renderStatus();
-            // 服务是异步绑定的：绑定前 readState() 只能回退默认 true，
-            // 若此时就把开关画成"开"，用户重开设置页会以为配置全丢了。
-            // 所以绑定成功后立刻按真实存储重刷一遍开关。
             if (!synced && App.svc() != null) {
                 synced = true;
                 syncSwitches();
@@ -264,15 +323,14 @@ public final class MainActivity extends Activity {
         }
     };
 
-    private final java.util.LinkedHashMap<String, Switch> switches = new java.util.LinkedHashMap<>();
+    private final LinkedHashMap<String, Switch> switches = new LinkedHashMap<>();
     private volatile boolean synced;
 
     private void syncSwitches() {
         try {
             io.github.libxposed.service.XposedService s = App.svc();
             if (s == null) return;
-            android.content.SharedPreferences p =
-                    s.getRemotePreferences(Config.PREF_GROUP);
+            android.content.SharedPreferences p = s.getRemotePreferences(Config.PREF_GROUP);
             for (java.util.Map.Entry<String, Switch> e : switches.entrySet()) {
                 Switch sw = e.getValue();
                 sw.setChecked(p.getBoolean(e.getKey(), Config.defaultVisible(e.getKey())));
@@ -284,7 +342,7 @@ public final class MainActivity extends Activity {
         } catch (Throwable ignored) {}
     }
 
-    // ------------------------------------------------------------------ UI 工厂
+    // ══════════════════════════════════════════════════════════ UI 工厂
 
     private TextView text(String s, int sp, int style, int color) {
         TextView t = new TextView(this);
@@ -292,12 +350,6 @@ public final class MainActivity extends Activity {
         t.setTextSize(sp);
         t.setTypeface(Typeface.DEFAULT_BOLD, style == Typeface.BOLD ? Typeface.BOLD : Typeface.NORMAL);
         t.setTextColor(color);
-        return t;
-    }
-
-    private TextView sectionHeader(String s) {
-        TextView t = text(s, 14, Typeface.BOLD, TX_ACCENT);
-        t.setPadding(dp(6), dp(18), 0, dp(8));
         return t;
     }
 
@@ -317,21 +369,16 @@ public final class MainActivity extends Activity {
         currentCard = null;
     }
 
-    /** 把 SDK 计数刷新成实时值 */
     private void refreshSdkRow() {
-        try {
-            if (sdkRow != null) sdkRow.setText(sdkSummary());
-        } catch (Throwable ignored) {}
+        try { if (sdkRow != null) sdkRow.setText(sdkSummary()); } catch (Throwable ignored) {}
     }
 
-    /** 设置页上那一行：已自动捕获多少个广告 SDK */
     private String sdkSummary() {
         int n = 0;
         try { n = SdkAutoBlock.learnedListForApp().size(); } catch (Throwable ignored) {}
         return "已捕获广告 SDK：" + n + " 个 · 点按查看清单";
     }
 
-    /** 已捕获清单；还能一键清空重新学习 */
     private void showLearnedSdks() {
         java.util.List<String> list;
         try { list = SdkAutoBlock.learnedListForApp(); } catch (Throwable t) { list = null; }
@@ -361,13 +408,16 @@ public final class MainActivity extends Activity {
                 .show();
     }
 
-    /** 开关被用户切了之后的回调（写配置成功才调用） */
     private interface OnToggle { void changed(boolean value); }
 
     private void addSwitch(String title, String key) { addSwitch(title, key, null); }
+    private void addSwitch(String title, String key, OnToggle onToggle) { addSwitch(title, key, onToggle, null); }
 
-    /** 统一规格开关行：52dp 高、左标题右 Switch、行间分隔线 */
-    private void addSwitch(String title, final String key, final OnToggle onToggle) {
+    /**
+     * 统一规格开关行。key 为 null 时是「纯 UI 开关」（如手风琴模式），初值由 initOverride 给、
+     * 不经 RemotePreferences；否则读写远端配置、默认值走 Config.defaultVisible。
+     */
+    private void addSwitch(String title, final String key, final OnToggle onToggle, final Boolean initOverride) {
         if (currentCard.getChildCount() > 0) {
             View divider = new View(this);
             divider.setBackgroundColor(DIVIDER);
@@ -383,20 +433,22 @@ public final class MainActivity extends Activity {
         label.setPadding(0, dp(12), dp(8), dp(12));
         row.addView(label, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
+        final boolean uiOnly = (key == null);
+        final boolean initChecked = uiOnly
+                ? (initOverride != null && initOverride)
+                : readState(key);
         final Switch sw = new Switch(this);
-        sw.setChecked(readState(key));
-        // 服务未绑定时先禁用，等 syncSwitches() 用真实存储值刷新后再放开
-        sw.setEnabled(App.svc() != null);
+        sw.setChecked(initChecked);
+        sw.setEnabled(uiOnly || App.svc() != null);
         sw.setClickable(false);
-        switches.put(key, sw);
+        if (!uiOnly) switches.put(key, sw);
         row.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 boolean next = !sw.isChecked();
-                if (App.writeBoolean(key, next)) {
+                boolean ok = uiOnly || App.writeBoolean(key, next);
+                if (ok) {
                     sw.setChecked(next);
-                    if (onToggle != null) {
-                        try { onToggle.changed(next); } catch (Throwable ignored) {}
-                    }
+                    if (onToggle != null) { try { onToggle.changed(next); } catch (Throwable ignored) {} }
                 } else {
                     Toast.makeText(MainActivity.this, "LSPosed 服务未连接，请稍后重试", Toast.LENGTH_SHORT).show();
                 }
@@ -411,7 +463,6 @@ public final class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
     }
 
-    /** 当前状态：优先读 RemotePreferences（Hook 侧同一数据源），读不到按各键默认值 */
     private boolean readState(String key) {
         boolean def = Config.defaultVisible(key);
         try {

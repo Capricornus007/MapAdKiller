@@ -30,6 +30,16 @@ public final class Config {
     public static final String K_HOME_CHIPS = "home_chips";
     public static final String K_DEBUG_LOG = "debug_log";
 
+    /** 主開關：關閉時所有「首頁/我的 UI 自定義」整體停用（去廣告不受影響，始終開啟）。 */
+    public static final String K_MASTER = "master_enabled";
+    /** 手風琴模式：開=分組可摺疊；關=全部設定直接展開。純 UI 狀態，供設置頁讀取。 */
+    public static final String K_ACCORDION = "accordion_mode";
+
+    /** 主開關默認開啟（失效安全：讀不到也當開，保持既有行為）。 */
+    public static boolean masterOn() {
+        try { return prefs().getBoolean(K_MASTER, true); } catch (Throwable t) { return true; }
+    }
+
     /** 桌面图标开关：true = 隐藏启动图标（改名本 App 的 launcher-alias 组件） */
     public static final String K_HIDE_ICON = "hide_launcher_icon";
 

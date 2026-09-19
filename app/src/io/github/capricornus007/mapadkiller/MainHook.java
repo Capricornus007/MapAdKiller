@@ -73,7 +73,7 @@ public final class MainHook extends XposedModule {
                     H.log(Log.INFO, TAG, "event=install_begin pkg=" + pkg);
                     AmapHooks.install(cl);   // 去广告基线
                     TreeDump.install();      // 取证用全树 dump（debugLog 打开时才输出）
-                    HomeTweaks.install(cl);  // 首页/「我的」页 UI 自定义（配置驱动）
+                    if (Config.masterOn()) HomeTweaks.install(cl);  // 首页/「我的」页 UI 自定义（受主开关）
                     break;
                 case PKG_BMAP:
                     H.log(Log.INFO, TAG, "event=install_begin pkg=" + pkg);
@@ -82,7 +82,7 @@ public final class MainHook extends XposedModule {
                 case PKG_TMAP:
                     H.log(Log.INFO, TAG, "event=install_begin pkg=" + pkg);
                     TmapHooks.install(cl);        // 去广告基线
-                    TmapHomeTweaks.install(cl);   // 首页底栏/大家都在看 自定义（配置驱动）
+                    if (Config.masterOn()) TmapHomeTweaks.install(cl);  // 首页底栏/大家都在看（受主开关）
                     break;
                 default:
                     break;
