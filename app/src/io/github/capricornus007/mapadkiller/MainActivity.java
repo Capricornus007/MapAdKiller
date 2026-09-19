@@ -34,17 +34,36 @@ public final class MainActivity extends Activity {
     private boolean accordion;                                  // 当前是否手风琴模式
     private final LinkedHashMap<String, View[]> sections = new LinkedHashMap<>();  // id -> {header, chevron, body}
 
-    private static final int BG_PAGE = 0xFFF2F3F7;
-    private static final int BG_CARD = 0xFFFFFFFF;
-    private static final int TX_PRIMARY = 0xFF1A1C1E;
-    private static final int TX_SECONDARY = 0xFF7A7E85;
-    private static final int TX_ACCENT = 0xFF0A6CF5;
-    private static final int DIVIDER = 0xFFECEEF1;
+    // 配色：跟随系统深浅色，onCreate 里按 night 选一套（原来写死浅色，深色系统下刺眼）。
+    private boolean night;
+    private int BG_PAGE, BG_CARD, TX_PRIMARY, TX_SECONDARY, TX_ACCENT, DIVIDER, SW_ON;
     private static final int CARD_RADIUS = 14;
+
+    private void applyPalette() {
+        if (night) {
+            BG_PAGE     = 0xFF10131A;
+            BG_CARD     = 0xFF1B1F28;
+            TX_PRIMARY  = 0xFFE6E8EC;
+            TX_SECONDARY= 0xFF9AA0AA;
+            TX_ACCENT   = 0xFF7FB0FF;
+            DIVIDER     = 0xFF2A2F3A;
+        } else {
+            BG_PAGE     = 0xFFF2F3F7;
+            BG_CARD     = 0xFFFFFFFF;
+            TX_PRIMARY  = 0xFF1A1C1E;
+            TX_SECONDARY= 0xFF7A7E85;
+            TX_ACCENT   = 0xFF0A6CF5;
+            DIVIDER     = 0xFFECEEF1;
+        }
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        night = (getResources().getConfiguration().uiMode
+                & android.content.res.Configuration.UI_MODE_NIGHT_MASK)
+                == android.content.res.Configuration.UI_MODE_NIGHT_YES;
+        applyPalette();
         ScrollView scroll = new ScrollView(this);
         scroll.setBackgroundColor(BG_PAGE);
         scroll.setFillViewport(true);

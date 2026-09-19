@@ -14,7 +14,7 @@
         android:label="MapAdKiller"
         android:description="@string/description"
         android:icon="@drawable/ic_launcher"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
 
         <!-- 设置页本体：不挂 LAUNCHER，只留 exported 便于 adb / 通知跳转 -->
         <activity
