@@ -144,17 +144,15 @@ public final class TmapHomeTweaks {
     // -------------------------------------------------------------- 标签栏
 
     /**
-     * 底栏其实是普通 android.widget.LinearLayout（4 个 ViewGroup 槽位固定等宽）。
-     *
-     * 试过两种错法：
-     *  - removeView 摘掉不要的槽位：确实只剩两格，但「我的」从第 3 格被挤到第 1 格，
-     *    腾讯按子 View 序号找页面，序号一变点「我的」却开首页内容（截图 192636）；
-     *  - 隐藏格 setVisibility(GONE)：腾讯排版时会把 tab 槽位 visibility 拨回 VISIBLE，
-     *    GONE 站不住，等于没藏（实测冷启+重启后 4 格仍全在）。
-     *
-     * 现在：槽位永远留在树里、永远保持 VISIBLE（保住 indexOfChild → 导航不破），
-     * 只动 LayoutParams —— 隐藏的宽 0 权重 0（不占位、点不到、且不受 visibility 复原影响），
-     * 可见的宽 0 权重 1。于是开了隐藏哪几格，剩下的就自动几等分（留首页/我的即二等分）。
+     * 底栏是普通 android.widget.LinearLayout（4 个槽位），它的父 FrameLayout 才是那条
+     * 深色圆角背景。用户要「底栏整体缩到刚好包住剩下的标签、居中」，做法：
+     *  - 隐藏格：宽 0、权重 0、保持 VISIBLE —— 不靠 visibility 隐藏（免得被腾讯排版
+     *    复原），宽 0 在 wrap 父容器里不占位；槽位仍留在树里 → indexOfChild 序号不变
+     *    → 点「我的」导航不破；
+     *  - 可见格：宽 WRAP_CONTENT（自然宽度）；
+     *  - 标签行 + 背景父容器：都改成 WRAP_CONTENT 并在各自父级里水平居中，于是整条栏
+     *    （含深色背景）缩到刚好包住剩下的标签、两侧留白。
+     * 没藏任何格时（全显示）把行/背景容器还原 MATCH_PARENT、槽位改回等宽平分，恢复原样。
      */
     private static void applyTabs(View root, Resources res) {
         ViewGroup row = tabRowRef != null ? tabRowRef.get() : null;
@@ -164,35 +162,86 @@ public final class TmapHomeTweaks {
         }
         if (row == null || row.getChildCount() < 2) return;
 
+        // 先数要藏几格，决定「缩栏居中」还是「恢复原样」
+        int hiddenN = 0, visibleN = 0;
+        for (int i = 0; i < row.getChildCount(); i++) {
+            String label = tabLabel(row.getChildAt(i), res);
+            if (label == null) continue;
+            if (Config.tmapTabVisible(label)) visibleN++; else hiddenN++;
+        }
+        boolean shrink = hiddenN > 0;
+        // 缩栏时每个保留标签给一个「正常标签宽度」（约等于原来 4 等分的一格），
+        // 这样栏只是缩到刚好放得下这几个、居中，不会挤成一坨文字。
+        int perTab = (int) (res.getDisplayMetrics().widthPixels * 0.22f + 0.5f);
+
         boolean changed = false;
-        int visibleN = 0, hiddenN = 0;
         for (int i = 0; i < row.getChildCount(); i++) {
             View cell = row.getChildAt(i);
             String label = tabLabel(cell, res);
-            if (label == null) continue;                     // 认不出的槽位保持原样
+            if (label == null) continue;
             boolean vis = Config.tmapTabVisible(label);
-            if (vis) visibleN++; else hiddenN++;
 
-            // 强制保持 VISIBLE：不靠 visibility 隐藏，避免被腾讯复原；隐藏靠宽 0 权重 0
-            if (cell.getVisibility() != View.VISIBLE) {
-                cell.setVisibility(View.VISIBLE); changed = true;
-            }
+            if (cell.getVisibility() != View.VISIBLE) { cell.setVisibility(View.VISIBLE); changed = true; }
 
             ViewGroup.LayoutParams lp = cell.getLayoutParams();
             LinearLayout.LayoutParams llp = (lp instanceof LinearLayout.LayoutParams)
                     ? (LinearLayout.LayoutParams) lp
                     : new LinearLayout.LayoutParams(
                             0, lp == null ? ViewGroup.LayoutParams.MATCH_PARENT : lp.height);
-            float wantWeight = vis ? 1f : 0f;
-            if (llp.width != 0 || llp.weight != wantWeight) {
-                llp.width = 0; llp.weight = wantWeight;
+            int wantW; float wantWt;
+            if (!shrink) { wantW = 0; wantWt = 1f; }                                  // 全显示：等宽平分
+            else { wantW = vis ? perTab : 0; wantWt = 0f; }                           // 缩栏：保留格正常宽、隐藏 0
+            if (llp.width != wantW || llp.weight != wantWt) {
+                llp.width = wantW; llp.weight = wantWt;
                 cell.setLayoutParams(llp); changed = true;
             }
+
+            // 缩栏时把选中高亮（selected_layout/unselected_layout 的背景「块」）撑满整格，
+            // 否则它只裹住图标、在变宽的一格里像颗浮着的圆点，看着不对。
+            if (shrink && vis) {
+                View hi = findViewByResName(cell, "selected_layout");
+                if (hi == null) hi = findViewByResName(cell, "unselected_layout");
+                if (hi != null) {
+                    ViewGroup.LayoutParams hlp = hi.getLayoutParams();
+                    if (hlp != null && hlp.width != ViewGroup.LayoutParams.MATCH_PARENT) {
+                        hlp.width = ViewGroup.LayoutParams.MATCH_PARENT;
+                        hi.setLayoutParams(hlp); changed = true;
+                    }
+                }
+            }
         }
-        if (changed) row.requestLayout();
-        if (hiddenN > 0 && logged.add("tmap_tab_done"))
-            H.log(Log.INFO, MainHook.TAG,
-                    "TMAP-TAB-HIDE 可见" + visibleN + " 隐藏" + hiddenN + "（等宽平分）");
+
+        ViewParent bar = row.getParent();                 // 深色圆角背景容器
+        changed |= wrapCenter(row, shrink);
+        if (bar instanceof View) changed |= wrapCenter((View) bar, shrink);
+
+        if (changed) {
+            row.requestLayout();
+            if (bar instanceof View) ((View) bar).requestLayout();
+        }
+        if (shrink && logged.add("tmap_tab_done"))
+            H.log(Log.INFO, MainHook.TAG, "TMAP-TAB 缩栏居中 可见" + visibleN + " 隐藏" + hiddenN);
+    }
+
+    /** 把 v 在其父容器里改成 WRAP_CONTENT + 水平居中；shrink=false 时还原 MATCH_PARENT。 */
+    private static boolean wrapCenter(View v, boolean shrink) {
+        ViewGroup.LayoutParams lp = v.getLayoutParams();
+        if (lp == null) return false;
+        boolean ch = false;
+        int wantW = shrink ? ViewGroup.LayoutParams.WRAP_CONTENT : ViewGroup.LayoutParams.MATCH_PARENT;
+        if (lp.width != wantW) { lp.width = wantW; ch = true; }
+        if (lp instanceof android.widget.FrameLayout.LayoutParams) {
+            android.widget.FrameLayout.LayoutParams flp =
+                    (android.widget.FrameLayout.LayoutParams) lp;
+            if (shrink) {
+                int base = flp.gravity < 0 ? 0 : flp.gravity;
+                // 0x00800007 = RELATIVE_LAYOUT_DIRECTION | HORIZONTAL(LEFT/RIGHT/CENTER_H)
+                int g = (base & ~0x00800007) | android.view.Gravity.CENTER_HORIZONTAL;
+                if (flp.gravity != g) { flp.gravity = g; ch = true; }
+            }
+        }
+        if (ch) v.setLayoutParams(lp);
+        return ch;
     }
 
     /**
@@ -343,6 +392,24 @@ public final class TmapHomeTweaks {
             for (int i = 0; i < g.getChildCount(); i++) if (containsIdNamed(g.getChildAt(i), idName)) return true;
         }
         return false;
+    }
+
+    /** 深度优先找 resource-id 名为 idName 的 View（不要求是 TextView）。 */
+    private static View findViewByResName(View v, String idName) {
+        if (v.getId() != 0) {
+            try {
+                String n = v.getResources().getResourceName(v.getId());
+                if (n != null && n.endsWith(":id/" + idName)) return v;
+            } catch (Throwable ignored) {}
+        }
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) {
+                View r = findViewByResName(g.getChildAt(i), idName);
+                if (r != null) return r;
+            }
+        }
+        return null;
     }
 
     private static TextView findTextViewByIdName(View v, String idName) {
