@@ -81,7 +81,8 @@ public final class MainHook extends XposedModule {
                     break;
                 case PKG_TMAP:
                     H.log(Log.INFO, TAG, "event=install_begin pkg=" + pkg);
-                    TmapHooks.install(cl);
+                    TmapHooks.install(cl);        // 去广告基线
+                    TmapHomeTweaks.install(cl);   // 首页底栏/大家都在看 自定义（配置驱动）
                     break;
                 default:
                     break;

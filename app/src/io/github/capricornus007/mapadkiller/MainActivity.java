@@ -122,6 +122,14 @@ public final class MainActivity extends Activity {
         addSwitch("资质信息 / 协议中心", Config.K_MY_QUALITY);
         endCard(root);
 
+        // ---- 腾讯 · 首页（键名带 tmap_ 前缀，与高德/百度各自独立）----
+        root.addView(sectionHeader("腾讯 · 首页"));
+        beginCard();
+        for (String tab : Config.TMAP_TABS)
+            addSwitch("显示底部标签「" + tab + "」", Config.K_TMAP_TAB_PREFIX + tab);
+        addSwitch("「大家都在看」推荐流", Config.K_TMAP_FEED_HOT);
+        endCard(root);
+
         // ---- 其他 ----
         root.addView(sectionHeader("其他"));
         beginCard();

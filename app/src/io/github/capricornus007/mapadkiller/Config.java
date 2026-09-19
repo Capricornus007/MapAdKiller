@@ -59,8 +59,9 @@ public final class Config {
      */
     public static final String K_TOOL_EXTRA = "tool_extra_page";
 
-    /** 各键的默认可见性：只有扩展工具页默认隐藏，其余一律默认显示（失效安全） */
+    /** 各键的默认可见性：腾讯键走 tmap 默认；其余只有扩展工具页默认隐藏，其它一律显示（失效安全） */
     public static boolean defaultVisible(String key) {
+        if (key != null && key.startsWith("tmap_")) return tmapDefaultVisible(key);
         return !K_TOOL_EXTRA.equals(key);
     }
 
@@ -76,6 +77,38 @@ public final class Config {
     public static final String[] TABS = {
             "首页", "探索", "长按说话", "打车", "我的",
     };
+
+    // ---- 腾讯地图（com.tencent.map）：键名一律加 "tmap_" 前缀，与高德/百度分开 ----
+    // 用户要求「三家 App 的组件设定各自独立」，所以同一标签文本（如「探索」）
+    // 在高德是 tab_探索、在腾讯是 tmap_tab_探索，互不影响。
+    public static final String K_TMAP_TAB_PREFIX = "tmap_tab_";
+    /** 腾讯首页底部标签栏（11.6.0 实机：首页 / 探索 / 行程 / 我的） */
+    public static final String[] TMAP_TABS = {
+            "首页", "探索", "行程", "我的",
+    };
+    /** 腾讯首页「大家都在看」推荐流（标题 + 分类 chips + 卡片） */
+    public static final String K_TMAP_FEED_HOT = "tmap_feed_hot";
+
+    /** 腾讯各键默认可见性：首页/我的默认显示；探索/行程/大家都在看默认隐藏（用户明确要求去掉） */
+    public static boolean tmapDefaultVisible(String key) {
+        if ((K_TMAP_TAB_PREFIX + "首页").equals(key)) return true;
+        if ((K_TMAP_TAB_PREFIX + "我的").equals(key)) return true;
+        if ((K_TMAP_TAB_PREFIX + "探索").equals(key)) return false;
+        if ((K_TMAP_TAB_PREFIX + "行程").equals(key)) return false;
+        if (K_TMAP_FEED_HOT.equals(key)) return false;
+        return true;
+    }
+
+    public static boolean tmapTabVisible(String label) {
+        String key = K_TMAP_TAB_PREFIX + label;
+        boolean def = tmapDefaultVisible(key);
+        try { return prefs().getBoolean(key, def); } catch (Throwable t) { return def; }
+    }
+
+    public static boolean tmapFeedHotVisible() {
+        boolean def = tmapDefaultVisible(K_TMAP_FEED_HOT);
+        try { return prefs().getBoolean(K_TMAP_FEED_HOT, def); } catch (Throwable t) { return def; }
+    }
 
     /** 首页工具清单（键名 = "tool_" + 标签文本，与首页文本锚点一致） */
     public static final String[] TOOLS = {
