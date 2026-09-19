@@ -1,4 +1,4 @@
-package io.github.ldxm666.mapadkiller;
+package io.github.capricornus007.mapadkiller;
 
 import android.app.Activity;
 import android.os.Handler;

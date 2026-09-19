@@ -1,4 +1,4 @@
-package io.github.ldxm666.mapadkiller;
+package io.github.capricornus007.mapadkiller;
 
 import android.app.Application;
 import android.app.Notification;
@@ -132,7 +132,7 @@ public final class App extends Application implements XposedServiceHelper.OnServ
      *
      * 隐藏时挂一条常驻通知当"回家的路" —— 这是本模块唯一能保证用户还进得来设置页的手段，
      * 因为图标一旦被禁掉，桌面和 LSPosed 管理器的"打开"都找不到了。
-     * 手动兜底：adb shell am start -n io.github.ldxm666.mapadkiller/.MainActivity
+     * 手动兜底：adb shell am start -n io.github.capricornus007.mapadkiller/.MainActivity
      */
     public static void applyIconVisibility(Context ctx, boolean hide, boolean notify) {
         try {

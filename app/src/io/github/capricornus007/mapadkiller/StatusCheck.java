@@ -1,4 +1,4 @@
-package io.github.ldxm666.mapadkiller;
+package io.github.capricornus007.mapadkiller;
 
 /** LSPosed 状态自检用；被 hook 后 amEnabled() 返回 true */
 public final class StatusCheck {

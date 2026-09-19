@@ -1,4 +1,4 @@
-package io.github.ldxm666.mapadkiller;
+package io.github.capricornus007.mapadkiller;
 
 import android.content.SharedPreferences;
 
@@ -12,7 +12,7 @@ import android.content.SharedPreferences;
  */
 public final class Config {
 
-    public static final String PKG = "io.github.ldxm666.mapadkiller";
+    public static final String PKG = "io.github.capricornus007.mapadkiller";
     public static final String PREF_GROUP = "amap_enhancer_config";
 
     // ---- 键名 ----

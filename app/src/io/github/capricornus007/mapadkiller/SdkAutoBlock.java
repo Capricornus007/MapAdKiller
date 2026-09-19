@@ -1,4 +1,4 @@
-package io.github.ldxm666.mapadkiller;
+package io.github.capricornus007.mapadkiller;
 
 import android.content.Context;
 import android.content.ContextWrapper;
@@ -627,7 +627,7 @@ public final class SdkAutoBlock {
     }
 
     /** 上报通道：hook 进程 → 设置 App（App 侧有 prefs 写权限，负责落盘） */
-    public static final String ACTION_LEARNED = "io.github.ldxm666.mapadkiller.LEARNED";
+    public static final String ACTION_LEARNED = "io.github.capricornus007.mapadkiller.LEARNED";
     public static final String EXTRA_ROOTS = "roots";
 
     /**

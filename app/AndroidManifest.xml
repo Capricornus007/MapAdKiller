@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="io.github.ldxm666.mapadkiller"
+    package="io.github.capricornus007.mapadkiller"
     android:versionCode="8"
     android:versionName="1.0.7">
 
@@ -39,18 +39,18 @@
             android:name=".LearnedReceiver"
             android:exported="true">
             <intent-filter>
-                <action android:name="io.github.ldxm666.mapadkiller.LEARNED" />
+                <action android:name="io.github.capricornus007.mapadkiller.LEARNED" />
             </intent-filter>
         </receiver>
 
         <provider
             android:name=".LearnedProvider"
-            android:authorities="io.github.ldxm666.mapadkiller.learned"
+            android:authorities="io.github.capricornus007.mapadkiller.learned"
             android:exported="true" />
 
         <provider
             android:name="io.github.libxposed.service.XposedProvider"
-            android:authorities="io.github.ldxm666.mapadkiller.XposedService"
+            android:authorities="io.github.capricornus007.mapadkiller.XposedService"
             android:exported="true" />
     </application>
 </manifest>

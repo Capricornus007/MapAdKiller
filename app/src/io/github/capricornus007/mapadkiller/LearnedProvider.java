@@ -1,4 +1,4 @@
-package io.github.ldxm666.mapadkiller;
+package io.github.capricornus007.mapadkiller;
 
 import android.content.ContentProvider;
 import android.content.ContentValues;
@@ -28,7 +28,7 @@ import java.util.regex.Pattern;
  */
 public final class LearnedProvider extends ContentProvider {
 
-    public static final String AUTHORITY = "io.github.ldxm666.mapadkiller.learned";
+    public static final String AUTHORITY = "io.github.capricornus007.mapadkiller.learned";
     public static final Uri URI = Uri.parse("content://" + AUTHORITY);
     public static final String METHOD_PUT = "putRoots";
     public static final String KEY_ROOTS = "roots";

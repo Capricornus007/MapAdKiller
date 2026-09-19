@@ -1,4 +1,4 @@
-package io.github.ldxm666.mapadkiller;
+package io.github.capricornus007.mapadkiller;
 
 import android.util.Log;
 
@@ -22,7 +22,7 @@ public final class MainHook extends XposedModule {
     public static final String PKG_AMAP = "com.autonavi.minimap";
     public static final String PKG_BMAP = "com.baidu.BaiduMap";
     public static final String PKG_TMAP = "com.tencent.map";
-    public static final String PKG_SELF = "io.github.ldxm666.mapadkiller";
+    public static final String PKG_SELF = "io.github.capricornus007.mapadkiller";
 
     private volatile String loadedProcess;
 
