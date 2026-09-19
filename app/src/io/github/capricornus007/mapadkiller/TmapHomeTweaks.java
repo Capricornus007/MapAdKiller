@@ -1,6 +1,8 @@
 package io.github.capricornus007.mapadkiller;
 
 import android.app.Activity;
+import android.content.ContentResolver;
+import android.content.Context;
 import android.content.res.Resources;
 import android.os.Handler;
 import android.os.Looper;
@@ -66,6 +68,7 @@ public final class TmapHomeTweaks {
     private static void applyHome(Activity act) {
         if (act == null || act.isFinishing()) return;
         try {
+            installRotationGuard(act);
             View decor = act.getWindow().getDecorView();
             Resources res = act.getResources();
             applyTabs(decor, res);
@@ -73,6 +76,42 @@ public final class TmapHomeTweaks {
             hookScroll(decor, res);   // 大家都在看 是滚动才懒渲染，挂个节流滚动回调
         } catch (Throwable t) {
             H.log(Log.WARN, MainHook.TAG, "tmap_home apply err " + t);
+        }
+    }
+
+    // 腾讯地图启动会强开系统「自动旋转」(accelerometer_rotation=1)，害得离开地图后别的应用也跟着转。
+    // 在地图进程内挂个 ContentObserver：值一变 1 就立刻拨回 0；首次挂上时也直接归零一次。
+    private static volatile boolean rotationGuard;
+    private static void installRotationGuard(Context ctx) {
+        if (rotationGuard) return;
+        rotationGuard = true;
+        try {
+            final ContentResolver cr = ctx.getContentResolver();
+            android.provider.Settings.System.putInt(cr,
+                    android.provider.Settings.System.ACCELEROMETER_ROTATION, 0);
+            android.net.Uri uri = android.provider.Settings.System
+                    .getUriFor(android.provider.Settings.System.ACCELEROMETER_ROTATION);
+            cr.registerContentObserver(uri, false,
+                    new android.database.ContentObserver(new android.os.Handler(
+                            android.os.Looper.getMainLooper())) {
+                        private boolean logged = false;
+                        @Override public void onChange(boolean selfChange) {
+                            try {
+                                if (android.provider.Settings.System.getInt(cr,
+                                        android.provider.Settings.System.ACCELEROMETER_ROTATION, 0) == 1) {
+                                    android.provider.Settings.System.putInt(cr,
+                                            android.provider.Settings.System.ACCELEROMETER_ROTATION, 0);
+                                    if (!logged) { logged = true;
+                                        H.log(Log.INFO, MainHook.TAG, "TMAP-BLOCK 自动旋转被拨回 0");
+                                    }
+                                }
+                            } catch (Throwable ignored) {}
+                        }
+                    });
+            H.log(Log.INFO, MainHook.TAG, "tmap rotation guard installed");
+        } catch (Throwable t) {
+            rotationGuard = false;   // 失败允许下次重试
+            H.log(Log.WARN, MainHook.TAG, "tmap rotation guard fail " + t);
         }
     }
 
@@ -207,21 +246,68 @@ public final class TmapHomeTweaks {
 
     private static void applyFeedHot(View root, Resources res) {
         if (Config.tmapFeedHotVisible()) return;
-        View title = findViewByText(root, "大家都在看", 0);
-        if (title == null) return;
-        View section = bubbleToSection(title);
-        if (section == null) section = title;
+        // 只在「首页」动手：首页内容根 home_hippy_main / home_page_card_view 存在才继续，
+        // 否则（我的页 / 探索页等）绝不隐藏任何东西——之前 matcher 太宽会在别的页误伤。
+        if (!containsIdNamed(root, "home_hippy_main") && !containsIdNamed(root, "home_page_card_view")) return;
+        View section = findFeedSectionByStructure(root, 0);
+        if (section == null) return;
         if (section.getVisibility() != View.GONE) {
             section.setVisibility(View.GONE);
-            if (section instanceof ViewGroup) {
-                // 只清掉「大家都在看」这一块，不动整张首页抽屉
-            }
             if (logged.add("feed_hot"))
                 H.log(Log.INFO, MainHook.TAG, "TMAP-FEED-HIDE 大家都在看 section="
-                        + section.getClass().getName());
+                        + section.getClass().getName() + " h=" + section.getHeight());
             ViewParent p = section.getParent();
             if (p instanceof View) p.requestLayout();
         }
+    }
+
+    /**
+     * DFS 找最小的「大家都在看」区块：一个全宽容器，其直接子里
+     *   一个「含横向分类 chips 条」——且该 chips 条有 ≥5 个子项（全部/美食/景点/酒店/去哪玩/本地优惠/运动户外），且
+     *   另一个「高度 > 400」（下面的卡片流）。
+     * 要求 chips≥5 是为了排除「我的」页那种只有两三项的横向行，避免误伤。先递归子、优先最内层匹配。
+     */
+    private static View findFeedSectionByStructure(View v, int depth) {
+        if (depth > 40 || !(v instanceof ViewGroup)) return null;
+        ViewGroup g = (ViewGroup) v;
+        for (int i = 0; i < g.getChildCount(); i++) {
+            View r = findFeedSectionByStructure(g.getChildAt(i), depth + 1);
+            if (r != null) return r;
+        }
+        if (g.getChildCount() >= 2 && g.getWidth() > 1000 && !containsIdNamed(g, "home_hippy_main")) {
+            boolean chipBar = false, tallCards = false;
+            for (int i = 0; i < g.getChildCount(); i++) {
+                View c = g.getChildAt(i);
+                if (c.getHeight() > 400) tallCards = true;
+                if (isChipBar(c)) chipBar = true;
+            }
+            if (chipBar && tallCards) return g;
+        }
+        return null;
+    }
+
+    /** c 或其子代里是否有一个「≥5 个子项的横向滚动条」（分类 chips）。 */
+    private static boolean isChipBar(View c) {
+        if (c instanceof android.widget.HorizontalScrollView && countHScrollItems(c) >= 5) return true;
+        if (c instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) c;
+            for (int i = 0; i < g.getChildCount(); i++) if (isChipBar(g.getChildAt(i))) return true;
+        }
+        return false;
+    }
+
+    /** 横向滚动条里的可点项数（取内部容器的 childCount）。 */
+    private static int countHScrollItems(View hs) {
+        if (hs instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) hs;
+            int best = g.getChildCount();
+            for (int i = 0; i < g.getChildCount(); i++) {
+                View ch = g.getChildAt(i);
+                if (ch instanceof ViewGroup) best = Math.max(best, ((ViewGroup) ch).getChildCount());
+            }
+            return best;
+        }
+        return 0;
     }
 
     /**

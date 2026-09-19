@@ -1,6 +1,9 @@
 package io.github.capricornus007.mapadkiller;
 
+import android.content.ContentResolver;
 import android.content.Context;
+
+import java.lang.reflect.Method;
 
 /**
  * 腾讯地图 com.tencent.map（11.4 与 11.5.0 双版本验证）
@@ -13,6 +16,7 @@ import android.content.Context;
  *  - 视图兜底: POI 列表广告卡(AdCardView)、NoticeBanner、EtcpBannerCard、
  *      路线运营横幅(OperationBannerView/BusOperationBannerView)、
  *      地图浮层推广气泡(ExBannerWidget/ExMutableBannerView)、首页运营卡
+ *  - 阻止腾讯启动时强开系统「自动旋转」（否则离开地图后别的应用也跟着乱转）
  */
 public final class TmapHooks {
 
