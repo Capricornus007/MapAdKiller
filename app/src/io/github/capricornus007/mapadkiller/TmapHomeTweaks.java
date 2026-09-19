@@ -143,68 +143,56 @@ public final class TmapHomeTweaks {
 
     // -------------------------------------------------------------- 标签栏
 
-    /** 被移除的 tab 槽位：label -> {cell, parent, index}，供配置改回显示时还原 */
-    private static final java.util.LinkedHashMap<String, Object[]> removedTabs =
-            new java.util.LinkedHashMap<>();
-
+    /**
+     * 底栏其实是普通 android.widget.LinearLayout（4 个 ViewGroup 槽位固定等宽）。
+     *
+     * 试过两种错法：
+     *  - removeView 摘掉不要的槽位：确实只剩两格，但「我的」从第 3 格被挤到第 1 格，
+     *    腾讯按子 View 序号找页面，序号一变点「我的」却开首页内容（截图 192636）；
+     *  - 隐藏格 setVisibility(GONE)：腾讯排版时会把 tab 槽位 visibility 拨回 VISIBLE，
+     *    GONE 站不住，等于没藏（实测冷启+重启后 4 格仍全在）。
+     *
+     * 现在：槽位永远留在树里、永远保持 VISIBLE（保住 indexOfChild → 导航不破），
+     * 只动 LayoutParams —— 隐藏的宽 0 权重 0（不占位、点不到、且不受 visibility 复原影响），
+     * 可见的宽 0 权重 1。于是开了隐藏哪几格，剩下的就自动几等分（留首页/我的即二等分）。
+     */
     private static void applyTabs(View root, Resources res) {
         ViewGroup row = tabRowRef != null ? tabRowRef.get() : null;
         if (row == null || row.getParent() == null || !row.isShown()) {
             row = findTabRow(root, 0);
             tabRowRef = row == null ? null : new WeakReference<>(row);
         }
-        if (row == null) return;
+        if (row == null || row.getChildCount() < 2) return;
 
-        // 先还原：配置又打开的标签，放回原来的父容器与位置
-        if (!removedTabs.isEmpty()) {
-            java.util.Iterator<java.util.Map.Entry<String, Object[]>> it = removedTabs.entrySet().iterator();
-            while (it.hasNext()) {
-                java.util.Map.Entry<String, Object[]> e = it.next();
-                if (Config.tmapTabVisible(e.getKey())) {
-                    View cell = (View) e.getValue()[0];
-                    ViewGroup parent = (ViewGroup) e.getValue()[1];
-                    int index = (Integer) e.getValue()[2];
-                    if (cell.getParent() == null && parent != null) {
-                        parent.addView(cell, Math.min(index, parent.getChildCount()));
-                    }
-                    it.remove();
-                }
-            }
-        }
-
-        if (row.getChildCount() < 2) return;
-
-        // 腾讯这条栏是自定义 ViewGroup，按「固定槽位数」排版，GONE 掉仍占位→
-        // 只剩两个标签时中间和两头全是空（用户说的「四分之一很丑」）。所以直接
-        // removeView 把不要的槽位摘掉，让剩下的标签平分整条栏。
         boolean changed = false;
-        for (int i = row.getChildCount() - 1; i >= 0; i--) {
-            View cell = row.getChildAt(i);
-            String label = tabLabel(cell, res);
-            if (label == null) continue;                       // 认不出的槽位不动
-            if (Config.tmapTabVisible(label)) {
-                if (cell.getVisibility() == View.GONE) cell.setVisibility(View.VISIBLE);
-                continue;
-            }
-            if (!removedTabs.containsKey(label)) {
-                removedTabs.put(label, new Object[]{cell, row, i});
-                row.removeViewAt(i);
-                changed = true;
-                if (logged.add("tab_" + label))
-                    H.log(Log.INFO, MainHook.TAG, "TMAP-TAB-HIDE " + label);
-            }
-        }
-
-        // 兜底：若这栏其实是 LinearLayout，让可见格等宽平分（自定义栏靠上面的 removeView 已生效）
+        int visibleN = 0, hiddenN = 0;
         for (int i = 0; i < row.getChildCount(); i++) {
             View cell = row.getChildAt(i);
+            String label = tabLabel(cell, res);
+            if (label == null) continue;                     // 认不出的槽位保持原样
+            boolean vis = Config.tmapTabVisible(label);
+            if (vis) visibleN++; else hiddenN++;
+
+            // 强制保持 VISIBLE：不靠 visibility 隐藏，避免被腾讯复原；隐藏靠宽 0 权重 0
+            if (cell.getVisibility() != View.VISIBLE) {
+                cell.setVisibility(View.VISIBLE); changed = true;
+            }
+
             ViewGroup.LayoutParams lp = cell.getLayoutParams();
-            if (lp instanceof LinearLayout.LayoutParams) {
-                LinearLayout.LayoutParams llp = (LinearLayout.LayoutParams) lp;
-                if (llp.width != 0 || llp.weight != 1f) { llp.width = 0; llp.weight = 1f; cell.setLayoutParams(llp); changed = true; }
+            LinearLayout.LayoutParams llp = (lp instanceof LinearLayout.LayoutParams)
+                    ? (LinearLayout.LayoutParams) lp
+                    : new LinearLayout.LayoutParams(
+                            0, lp == null ? ViewGroup.LayoutParams.MATCH_PARENT : lp.height);
+            float wantWeight = vis ? 1f : 0f;
+            if (llp.width != 0 || llp.weight != wantWeight) {
+                llp.width = 0; llp.weight = wantWeight;
+                cell.setLayoutParams(llp); changed = true;
             }
         }
         if (changed) row.requestLayout();
+        if (hiddenN > 0 && logged.add("tmap_tab_done"))
+            H.log(Log.INFO, MainHook.TAG,
+                    "TMAP-TAB-HIDE 可见" + visibleN + " 隐藏" + hiddenN + "（等宽平分）");
     }
 
     /**

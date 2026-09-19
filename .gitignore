@@ -15,3 +15,7 @@ work/
 # editor
 .vscode/
 .idea/
+
+# built APKs and gettext residue (reproducible via app/build.sh)
+releases/
+*.mo
