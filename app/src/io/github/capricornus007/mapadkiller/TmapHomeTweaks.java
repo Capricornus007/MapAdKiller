@@ -36,6 +36,10 @@ public final class TmapHomeTweaks {
 
     private static WeakReference<ViewGroup> tabRowRef;
 
+    /** true = 正在隐藏标签 → 跳过液态色块的 onDraw；4 格全显时保留原生高亮。 */
+    private static volatile boolean blobOff;
+    private static volatile boolean liquidHooked;
+
     public static void install(ClassLoader cl) {
         try {
             Method onResume = Activity.class.getDeclaredMethod("onResume");
@@ -195,25 +199,15 @@ public final class TmapHomeTweaks {
                 llp.width = wantW; llp.weight = wantWt;
                 cell.setLayoutParams(llp); changed = true;
             }
-
-            // 缩栏时把选中高亮（selected_layout/unselected_layout 的背景「块」）撑满整格，
-            // 否则它只裹住图标、在变宽的一格里像颗浮着的圆点，看着不对。
-            if (shrink && vis) {
-                View hi = findViewByResName(cell, "selected_layout");
-                if (hi == null) hi = findViewByResName(cell, "unselected_layout");
-                if (hi != null) {
-                    ViewGroup.LayoutParams hlp = hi.getLayoutParams();
-                    if (hlp != null && hlp.width != ViewGroup.LayoutParams.MATCH_PARENT) {
-                        hlp.width = ViewGroup.LayoutParams.MATCH_PARENT;
-                        hi.setLayoutParams(hlp); changed = true;
-                    }
-                }
-            }
         }
 
         ViewParent bar = row.getParent();                 // 深色圆角背景容器
         changed |= wrapCenter(row, shrink);
         if (bar instanceof View) changed |= wrapCenter((View) bar, shrink);
+
+        // 液态色块由这个 group 实例的 onDraw 画；用实例的真实 Class 挂 hook
+        // （按类名 loadClass 会拿到别的 classloader 的副本、hook 不触发）。
+        if (bar instanceof View) hookLiquid((View) bar);
 
         if (changed) {
             row.requestLayout();
@@ -221,6 +215,29 @@ public final class TmapHomeTweaks {
         }
         if (shrink && logged.add("tmap_tab_done"))
             H.log(Log.INFO, MainHook.TAG, "TMAP-TAB 缩栏居中 可见" + visibleN + " 隐藏" + hiddenN);
+        blobOff = shrink;   // 只有真正藏了标签时才关掉那个液态色块（4 格全显时保留原生高亮）
+    }
+
+    /** 用 group 实例自己的 Class 挂 onDraw hook，跳过即去掉液态色块；只挂一次。 */
+    private static void hookLiquid(View group) {
+        if (liquidHooked) return;
+        liquidHooked = true;
+        try {
+            Method onDraw = group.getClass().getDeclaredMethod("onDraw", android.graphics.Canvas.class);
+            H.module.hook(onDraw)
+              .setId("tmap_liquid_off")
+              .setExceptionMode(io.github.libxposed.api.XposedInterface.ExceptionMode.DEFAULT)
+              .intercept(new io.github.libxposed.api.XposedInterface.Hooker() {
+                  @Override public Object intercept(io.github.libxposed.api.XposedInterface.Chain chain) throws Throwable {
+                      if (blobOff) return null;   // 跳过原生 onDraw → 不画色块
+                      return chain.proceed();
+                  }
+              });
+            H.log(Log.INFO, MainHook.TAG, "tmap liquid hook on " + group.getClass().getName());
+        } catch (Throwable t) {
+            liquidHooked = false;
+            H.log(Log.WARN, MainHook.TAG, "tmap liquid hook fail " + t);
+        }
     }
 
     /** 把 v 在其父容器里改成 WRAP_CONTENT + 水平居中；shrink=false 时还原 MATCH_PARENT。 */
@@ -392,24 +409,6 @@ public final class TmapHomeTweaks {
             for (int i = 0; i < g.getChildCount(); i++) if (containsIdNamed(g.getChildAt(i), idName)) return true;
         }
         return false;
-    }
-
-    /** 深度优先找 resource-id 名为 idName 的 View（不要求是 TextView）。 */
-    private static View findViewByResName(View v, String idName) {
-        if (v.getId() != 0) {
-            try {
-                String n = v.getResources().getResourceName(v.getId());
-                if (n != null && n.endsWith(":id/" + idName)) return v;
-            } catch (Throwable ignored) {}
-        }
-        if (v instanceof ViewGroup) {
-            ViewGroup g = (ViewGroup) v;
-            for (int i = 0; i < g.getChildCount(); i++) {
-                View r = findViewByResName(g.getChildAt(i), idName);
-                if (r != null) return r;
-            }
-        }
-        return null;
     }
 
     private static TextView findTextViewByIdName(View v, String idName) {
