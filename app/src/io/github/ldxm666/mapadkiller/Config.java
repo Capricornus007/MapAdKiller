@@ -28,29 +28,9 @@ public final class Config {
     public static final String K_FEED_AI = "feed_ai";
     public static final String K_FEED_FILTER = "feed_filter";
     public static final String K_HOME_CHIPS = "home_chips";
+    /** 搜索栏下方那一排圆形快捷入口（美食 / 酒店 / 景点门票 / 加油充电 / 出行节 / 扫街榜）总开关 */
+    public static final String K_HOME_QUICK_ROW = "home_quick_row";
     public static final String K_DEBUG_LOG = "debug_log";
-
-    /** 桌面图标开关：true = 隐藏启动图标（改名本 App 的 launcher-alias 组件） */
-    public static final String K_HIDE_ICON = "hide_launcher_icon";
-
-    /**
-     * 工具宫格里的「收藏夹」。它以前被并进「扩展工具页」一起隐藏，用户没法单独留它，
-     * 所以拆成独立键，默认显示，由设置页单独控制。
-     */
-    public static final String K_TOOL_FAVORITE = K_TOOL_PREFIX + "收藏夹";
-
-    /**
-     * 搜索页顶部那个分页金刚区：美食 / 酒店 / 加油站 / 休闲玩乐 / 扫街榜 …
-     * 它不是搜索功能，是运营位（用户原话：这是广告很影响），单独一个开关。
-     * 默认显示（与其它键一致的失效安全）。
-     */
-    public static final String K_SEARCH_CATS = "search_cat_row";
-
-    /**
-     * 首页底部那张「去XX」快捷打车卡（智能目的地：标题 + 座位提示 + 打车按钮）。
-     * 用户原话："有点没什么用" —— 单独一个开关，默认显示。
-     */
-    public static final String K_QUICK_CARD = "home_quick_card";
 
     /**
      * 工具宫格「扩展页」：首页工具宫格往下还有一排没被列进常用工具里的格子
@@ -59,9 +39,17 @@ public final class Config {
      */
     public static final String K_TOOL_EXTRA = "tool_extra_page";
 
-    /** 各键的默认可见性：只有扩展工具页默认隐藏，其余一律默认显示（失效安全） */
+    /**
+     * 各键的默认可见性。
+     *
+     * 默认**隐藏**的两个：
+     *  · 扩展工具页（景点游玩 / 离线地图 / …）—— 额外推荐位
+     *  · 搜索栏下方快捷入口整排（美食 / 酒店 / 景点门票 / 加油充电 / 出行节 / 扫街榜）
+     *    —— 用户明确说不需要它
+     * 其余一律默认显示（失效安全）。
+     */
     public static boolean defaultVisible(String key) {
-        return !K_TOOL_EXTRA.equals(key);
+        return !K_TOOL_EXTRA.equals(key) && !K_HOME_QUICK_ROW.equals(key);
     }
 
     // ---- 「我的」页 ----
@@ -114,7 +102,7 @@ public final class Config {
         return visible(K_TAB_PREFIX + label);
     }
 
-    /** 临时取证开关：真机测树期间强制开日志（交付前必须改回 false） */
+    /** 临时取证开关：真机测树期间强制开日志。交付版必须为 false（设置页有独立开关）。 */
     public static final boolean FORCE_DEBUG = false;
 
     private static volatile long dbgAt;

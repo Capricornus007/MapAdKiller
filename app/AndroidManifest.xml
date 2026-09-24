@@ -2,12 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="io.github.ldxm666.mapadkiller"
     android:versionCode="8"
-    android:versionName="1.0.7">
+    android:versionName="1.0.8">
 
     <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="34" />
-
-    <!-- 隐藏桌面图标后，靠一条常驻通知留住回设置页的入口 -->
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:name=".App"
@@ -16,17 +13,24 @@
         android:icon="@drawable/ic_launcher"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
 
-        <!-- 设置页本体：不挂 LAUNCHER，只留 exported 便于 adb / 通知跳转 -->
+        <!--
+            设置页本体：**故意不带 MAIN/LAUNCHER**，所以它自己不出现在桌面上，
+            但保持 exported + enabled —— 隐藏桌面图标后仍可用显式组件名拉起：
+                adb shell am start -n io.github.ldxm666.mapadkiller/.MainActivity
+            LSPosed 管理器也能照常打开它。
+        -->
         <activity
             android:name=".MainActivity"
             android:exported="true" />
 
-        <!-- 桌面图标开关就切这个别名组件：关掉它图标消失，打开它图标回来 -->
+        <!--
+            桌面入口。开/关由 App.setHideIcon() 通过
+            PackageManager#setComponentEnabledSetting 切换 —— 这就是「隐藏桌面图标」开关。
+        -->
         <activity-alias
-            android:name=".LauncherAlias"
+            android:name=".DesktopAlias"
             android:targetActivity=".MainActivity"
             android:exported="true"
-            android:enabled="true"
             android:label="MapAdKiller"
             android:icon="@drawable/ic_launcher">
             <intent-filter>
@@ -34,6 +38,21 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity-alias>
+
+        <!--
+            快捷设置磁贴：隐藏桌面图标之后唯一不会消失的入口。
+            它不进启动器，也不依赖 MAIN/LAUNCHER 解析，所以不受上面那个开关影响。
+        -->
+        <service
+            android:name=".SettingsTile"
+            android:exported="true"
+            android:icon="@drawable/ic_launcher"
+            android:label="MapAdKiller"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
 
         <receiver
             android:name=".LearnedReceiver"

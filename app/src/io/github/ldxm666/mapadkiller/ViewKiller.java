@@ -19,6 +19,15 @@ public final class ViewKiller {
     private final Pattern resPat;
     private final String tag;
 
+    /**
+     * 资源名按 id 缓存。
+     *
+     * Resources#getResourceName() 是一次真正的资源表查询，而 ViewKiller 每次 resume 要
+     * 走三遍整棵视图树、每个节点都调一次 —— 这是纯浪费（同一个 id 的结果永远一样）。
+     * 缓存后每棵树的成本从「节点数 × 资源查询」降到「不同 id 数 × 一次」。
+     */
+    private final java.util.HashMap<Integer, String> resNames = new java.util.HashMap<>();
+
     public ViewKiller(String tag, String classRegex, String resRegex) {
         this.tag = tag;
         this.classPat = classRegex == null ? null : Pattern.compile(classRegex);
@@ -40,8 +49,8 @@ public final class ViewKiller {
         try {
             if (classPat != null && classPat.matcher(v.getClass().getName()).find()) gone = true;
             if (!gone && resPat != null && v.getId() != View.NO_ID && v.getId() != 0) {
-                String name = res.getResourceName(v.getId());
-                if (name != null && resPat.matcher(name).find()) gone = true;
+                String name = resName(res, v.getId());
+                if (name != null && name.length() > 0 && resPat.matcher(name).find()) gone = true;
             }
             // 无障碍标签识别：广告卡通常自带 "广告"/"Ad" contentDescription
             if (!gone) {
@@ -90,11 +99,23 @@ public final class ViewKiller {
         return label;
     }
 
-    private static String safeName(View v, Resources res) {
+    /** 带缓存的资源名查询（查不到缓存空串，避免重复抛异常） */
+    private String resName(Resources res, int id) {
+        String c = resNames.get(id);
+        if (c != null) return c;
         try {
-            return v.getId() > 0 ? res.getResourceName(v.getId()) : "-";
+            c = res.getResourceName(id);
         } catch (Throwable t) {
-            return "?";
+            c = "";
         }
+        if (c == null) c = "";
+        resNames.put(id, c);
+        return c;
+    }
+
+    private String safeName(View v, Resources res) {
+        if (v.getId() <= 0) return "-";
+        String n = resName(res, v.getId());
+        return n.length() == 0 ? "?" : n;
     }
 }

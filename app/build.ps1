@@ -21,13 +21,22 @@ Copy-Item "$App\stub-src","$App\src","$App\res","$App\META-INF","$App\libs" -Des
 Copy-Item "$App\AndroidManifest.xml" $src
 if (-not (Test-Path "$src\AndroidManifest.xml")) { throw "copy failed" }
 
+# javac 会把「注: ... 使用或覆盖了已过时的 API」写到 stderr；Stop 策略下原生命令往 stderr
+# 写东西会被当成终止性错误，整个构建直接中断。所以原生调用期间临时降级为 Continue，
+# 只看退出码。
+$EAP = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+
 Write-Host "[1/6] compile libxposed-api stubs (compile-only)"
 & $Javac -encoding UTF-8 -nowarn -source 8 -target 8 -bootclasspath $Aj -d "$src\build\stubs" (Get-ChildItem "$src\stub-src" -Recurse -Filter *.java | % FullName) 2>"$src\build\j1.err"
-if ($LASTEXITCODE -ne 0) { Get-Content "$src\build\j1.err"; throw "stub compile failed" }
+$rc1 = $LASTEXITCODE
+if ($rc1 -ne 0) { Get-Content "$src\build\j1.err"; throw "stub compile failed" }
 
 Write-Host "[2/6] compile module sources (+ libxposed service jar)"
 & $Javac -encoding UTF-8 -nowarn -source 8 -target 8 -bootclasspath $Aj -classpath "$src\build\stubs;$src\libs\service-classes.jar" -d "$src\build\classes" (Get-ChildItem "$src\src" -Recurse -Filter *.java | % FullName) 2>"$src\build\j2.err"
-if ($LASTEXITCODE -ne 0) { Get-Content "$src\build\j2.err"; throw "module compile failed" }
+$rc2 = $LASTEXITCODE
+if ($rc2 -ne 0) { Get-Content "$src\build\j2.err"; throw "module compile failed" }
+$ErrorActionPreference = $EAP
 
 Write-Host "[3/6] d8 -> classes.dex (module + libxposed service merged)"
 & "$Jdk\bin\jar.exe" -cf "$src\build\classes.jar" -C "$src\build\classes" .
@@ -76,6 +85,6 @@ Write-Host "[6/6] dist"
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
 New-Item -ItemType Directory -Force -Path $Rel | Out-Null
 Copy-Item "$src\build\out\MapAdKiller.apk" "$Out\MapAdKiller.apk" -Force
-Copy-Item "$src\build\out\MapAdKiller.apk" "$Rel\MapAdKiller-v1.0.7.apk" -Force
-Get-Item "$Rel\MapAdKiller-v1.0.7.apk" | Select-Object FullName,Length
+Copy-Item "$src\build\out\MapAdKiller.apk" "$Rel\MapAdKiller-v1.0.8.apk" -Force
+Get-Item "$Rel\MapAdKiller-v1.0.8.apk" | Select-Object FullName,Length
 Write-Host "BUILD OK src=$src"

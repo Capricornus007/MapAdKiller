@@ -81,12 +81,8 @@ public final class MainActivity extends Activity {
         root.addView(sectionHeader("高德 · 首页工具宫格"));
         beginCard();
         for (String tool : Config.TOOLS) addSwitch("显示「" + tool + "」", Config.K_TOOL_PREFIX + tool);
-        addSwitch("显示扩展工具页（景点游玩 / 离线地图 / 通行费助手 / 旅游度假）",
+        addSwitch("显示扩展工具页（景点游玩 / 离线地图 / 通行费助手 / 收藏夹 / 旅游度假）",
                 Config.K_TOOL_EXTRA);
-        // 收藏夹从扩展工具页里拆出来，单独一个开关。
-        // 它以前被并进「更多工具」的别名，受「扩展工具页」和「更多工具」双重夹击，
-        // 用户怎么点都是隐藏的，所以给一条自己的行。
-        addSwitch("显示「收藏夹」", Config.K_TOOL_FAVORITE);
         endCard(root);
 
         // ---- 首页推荐内容 ----
@@ -101,14 +97,8 @@ public final class MainActivity extends Activity {
         addSwitch("问问 AI 入口", Config.K_FEED_AI);
         addSwitch("推荐频道栏（关注 / 附近 / 美食…）", Config.K_FEED_FILTER);
         addSwitch("设置家 / 设置单位 / 常去地点", Config.K_HOME_CHIPS);
-        addSwitch("智能出行推广卡（去XX / 帮我预约车辆 / AI叫车）", Config.K_QUICK_CARD);
-        endCard(root);
-
-        // ---- 搜索页 ----
-        root.addView(sectionHeader("高德 · 搜索页"));
-        beginCard();
-        addSwitch("显示搜索页「美食 / 酒店 / 加油站 / 休闲玩乐 / 扫街榜」那一排",
-                Config.K_SEARCH_CATS);
+        addSwitch("搜索栏下方快捷入口整排（美食 / 酒店 / 景点门票 / 加油充电 / 出行节 / 扫街榜）",
+                Config.K_HOME_QUICK_ROW);
         endCard(root);
 
         // ---- 「我的」页 ----
@@ -125,26 +115,15 @@ public final class MainActivity extends Activity {
         // ---- 其他 ----
         root.addView(sectionHeader("其他"));
         beginCard();
+        addLocalSwitch("隐藏桌面图标", App.K_HIDE_ICON);
+        addNoteRow("隐藏桌面图标后，桌面与 LSPosed 管理器里的入口会一起消失"
+                + "（两者走同一个入口查询）。请先加好快捷设置磁贴："
+                + "下拉通知栏 → 编辑磁贴 → 把 MapAdKiller 拖进面板；"
+                + "备用命令：adb shell am start -n io.github.ldxm666.mapadkiller/.MainActivity");
         addSwitch("调试日志（logcat 输出首页文本锚点）", Config.K_DEBUG_LOG);
-        addSwitch("隐藏桌面图标（靠常驻通知回到本页）", Config.K_HIDE_ICON, new OnToggle() {
-            @Override public void changed(boolean value) {
-                if (value) {
-                    // 隐藏前先要通知权限：那条常驻通知是"回家的路"，
-                    // 没有它用户就只能靠 adb 才回得来。
-                    App.ensureNotificationPermission(MainActivity.this);
-                    Toast.makeText(MainActivity.this,
-                            "图标已隐藏 · 从通知栏「MapAdKiller 正在运行」可以回到这里",
-                            Toast.LENGTH_LONG).show();
-                } else {
-                    Toast.makeText(MainActivity.this, "桌面图标已恢复", Toast.LENGTH_SHORT).show();
-                }
-                App.applyIconVisibility(MainActivity.this, value, true);
-            }
-        });
         addActionButton("恢复默认（全部显示）", new Runnable() {
             @Override public void run() {
                 if (App.clearAll()) {
-                    App.applyIconVisibility(MainActivity.this, false, true);   // 图标一并还原
                     Toast.makeText(MainActivity.this, "已恢复默认，请强停地图 App 生效", Toast.LENGTH_LONG).show();
                     recreate();
                 } else {
@@ -165,18 +144,8 @@ public final class MainActivity extends Activity {
         synced = false;          // 回到设置页时按存储重刷一遍开关
         // 服务绑好之后，把收到上报时服务还没就绪而暂存的学习结果补推一次
         try { LearnedProvider.flushToRemote(this); } catch (Throwable ignored) {}
-        try { App.syncIconFromConfig(this); } catch (Throwable ignored) {}
         refreshSdkRow();
         statusRefresher.run();
-    }
-
-    @Override
-    public void onRequestPermissionsResult(int code, String[] perms, int[] results) {
-        super.onRequestPermissionsResult(code, perms, results);
-        // 用户刚授了通知权限：如果图标是隐藏状态，把那条"回家的路"补上
-        if (code == App.REQ_NOTIFY && readState(Config.K_HIDE_ICON)) {
-            App.applyIconVisibility(this, true, true);
-        }
     }
 
     @Override
@@ -353,13 +322,8 @@ public final class MainActivity extends Activity {
                 .show();
     }
 
-    /** 开关被用户切了之后的回调（写配置成功才调用） */
-    private interface OnToggle { void changed(boolean value); }
-
-    private void addSwitch(String title, String key) { addSwitch(title, key, null); }
-
     /** 统一规格开关行：52dp 高、左标题右 Switch、行间分隔线 */
-    private void addSwitch(String title, final String key, final OnToggle onToggle) {
+    private void addSwitch(String title, final String key) {
         if (currentCard.getChildCount() > 0) {
             View divider = new View(this);
             divider.setBackgroundColor(DIVIDER);
@@ -386,9 +350,6 @@ public final class MainActivity extends Activity {
                 boolean next = !sw.isChecked();
                 if (App.writeBoolean(key, next)) {
                     sw.setChecked(next);
-                    if (onToggle != null) {
-                        try { onToggle.changed(next); } catch (Throwable ignored) {}
-                    }
                 } else {
                     Toast.makeText(MainActivity.this, "LSPosed 服务未连接，请稍后重试", Toast.LENGTH_SHORT).show();
                 }
@@ -401,6 +362,79 @@ public final class MainActivity extends Activity {
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         currentCard.addView(row, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+    }
+
+    /**
+     * 本地开关行（不走 LSPosed RemotePreferences）。
+     *
+     * 只用于「隐藏桌面图标」这类**模块 App 自身**的组件可见性：
+     * 它跟 hook 侧配置无关，写在自己进程的 SharedPreferences 里，
+     * 改完立刻调 PackageManager 生效，不需要强停任何地图 App。
+     */
+    private void addLocalSwitch(String title, final String key) {
+        if (currentCard.getChildCount() > 0) {
+            View divider = new View(this);
+            divider.setBackgroundColor(DIVIDER);
+            currentCard.addView(divider, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, dp(1))));
+        }
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setMinimumHeight(dp(52));
+
+        TextView label = text(title, 15, Typeface.NORMAL, TX_PRIMARY);
+        label.setPadding(0, dp(12), dp(8), dp(12));
+        row.addView(label, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        final Switch sw = new Switch(this);
+        boolean on = false;
+        try {
+            on = getSharedPreferences(App.UI_PREFS, MODE_PRIVATE).getBoolean(key, false);
+        } catch (Throwable ignored) {}
+        sw.setChecked(on);
+        sw.setClickable(false);
+        row.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                final boolean next = !sw.isChecked();
+                if (!next) {
+                    applyHide(next, sw);
+                    return;
+                }
+                // 隐藏前必须说清后果：桌面入口和 LSPosed 管理器的设置入口是同一个
+                // MAIN + LAUNCHER 查询，禁掉之后两者一起消失。
+                new android.app.AlertDialog.Builder(MainActivity.this)
+                        .setTitle("隐藏桌面图标？")
+                        .setMessage("隐藏后：\n"
+                                + "· 桌面/抽屉里的 MapAdKiller 图标消失\n"
+                                + "· LSPosed 管理器里的设置入口也会一起消失"
+                                + "（它用的是同一个入口查询）\n\n"
+                                + "请先把「快捷设置磁贴」加好：下拉通知栏 → 编辑磁贴 → "
+                                + "把 MapAdKiller 拖进面板，之后点磁贴即可打开本页。\n\n"
+                                + "备用入口（随时可用）：\n"
+                                + "adb shell am start -n io.github.ldxm666.mapadkiller/.MainActivity")
+                        .setNegativeButton("取消", null)
+                        .setPositiveButton("仍然隐藏", new android.content.DialogInterface.OnClickListener() {
+                            @Override public void onClick(android.content.DialogInterface d, int w) {
+                                applyHide(true, sw);
+                            }
+                        })
+                        .show();
+            }
+        });
+        row.addView(sw, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        currentCard.addView(row, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+    }
+
+    private void applyHide(boolean hide, Switch sw) {
+        boolean ok = App.setHideIcon(MainActivity.this, hide);
+        sw.setChecked(hide);
+        Toast.makeText(MainActivity.this,
+                ok ? (hide ? "已隐藏桌面图标（点磁贴或 adb 可再次打开）" : "已恢复桌面图标")
+                   : "组件状态变更被系统拒绝",
+                Toast.LENGTH_SHORT).show();
     }
 
     /** 当前状态：优先读 RemotePreferences（Hook 侧同一数据源），读不到按各键默认值 */
