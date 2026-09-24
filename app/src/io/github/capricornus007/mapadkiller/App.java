@@ -10,10 +10,8 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Build;
-
 import io.github.libxposed.service.XposedService;
 import io.github.libxposed.service.XposedServiceHelper;
-
 /**
  * 模块 App 进程：绑定 LSPosed 服务（用于写 RemotePreferences）。
  * Hook 进程不经过本类（Config 走 XposedModule#getRemotePreferences）。
@@ -97,12 +95,36 @@ public final class App extends Application implements XposedServiceHelper.OnServ
         } catch (Throwable ignored) {}
     }
 
+    // ══════════════════════════════════════════════════════════ 桌面图标隐藏
+
+    /**
+     * 「隐藏桌面图标」开关。
+     *
+     * 实现方式：MainActivity 自己**不带** MAIN/LAUNCHER（因此不进桌面），
+     * 桌面入口挂在 <activity-alias name=".LauncherAlias"> 上。
+     * 开关只改这个 alias 的组件启用状态；MainActivity 本体始终 enabled + exported，
+     * 所以隐藏图标后本设置页依然可以被显式组件名拉起：
+     *     adb shell am start -n io.github.capricornus007.mapadkiller/.MainActivity
+     *
+     * 状态存在模块 App 自己的 SharedPreferences（不进 LSPosed RemotePreferences）——
+     * 这是 App 侧组件可见性，与 hook 侧配置无关，也不需要地图 App 重启。
+     */
+    /**
+     * v1.0.8 换过键名与组件名（hide_launcher_icon / .LauncherAlias → hide_icon_v2 / .DesktopAlias）。
+     *
+     * 原因：旧版把桌面入口禁掉之后，LSPosed 管理器解析模块设置入口用的是同一个
+     * MAIN + LAUNCHER 查询，于是入口一起消失 —— 用户被锁在设置页外面。
+     * 换名之后旧机上残留的「已禁用」组件覆盖记录不再匹配，新组件默认启用，
+     * 升级一次图标就自己回来了；再配上磁贴入口，这个坑不会再踩第二次。
+     */
+    public static final String LAUNCHER_ALIAS = Config.PKG + ".DesktopAlias";
+
+
+
     @Override
     public void onCreate() {
         super.onCreate();
-        // 冷启动先按本地（可能过期的）默认值摆正图标，等服务绑上再按真实配置纠正一次，
-        // 免得用户装了新版本、配置在 LSPosed 库里而图标状态却是进程内存里的"没做过"。
-        try { applyIconVisibility(this, false, false); } catch (Throwable ignored) {}
+        syncIconFromConfig(this);
         try {
             XposedServiceHelper.registerListener(this);
         } catch (Throwable ignored) {}
@@ -120,7 +142,6 @@ public final class App extends Application implements XposedServiceHelper.OnServ
     // ────────────────────────────────────────────────── 桌面图标开关
 
     /** launcher 别名组件（manifest 里的 activity-alias），图标开关就是切它的 enabled */
-    public static final String LAUNCHER_ALIAS = Config.PKG + ".LauncherAlias";
 
     private static final String CH_ID = "mapadkiller_entry";
     private static final int NOTI_ID = 0x4DA1;

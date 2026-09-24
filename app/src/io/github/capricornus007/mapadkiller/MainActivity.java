@@ -138,6 +138,7 @@ public final class MainActivity extends Activity {
         addSwitch("推荐频道栏（关注 / 附近 / 美食…）", Config.K_FEED_FILTER);
         addSwitch("设置家 / 设置单位 / 常去地点", Config.K_HOME_CHIPS);
         addSwitch("智能出行推广卡（去XX / 帮我预约车辆 / AI叫车）", Config.K_QUICK_CARD);
+        addSwitch("搜索栏下方快捷入口整排（美食 / 酒店 / 景点门票 / 加油充电 / 出行节 / 扫街榜）", Config.K_HOME_QUICK_ROW);
         endSection(root);
 
         // ---- 高德 · 搜索页 ----
@@ -278,7 +279,6 @@ public final class MainActivity extends Activity {
         super.onResume();
         synced = false;
         try { LearnedProvider.flushToRemote(this); } catch (Throwable ignored) {}
-        try { App.syncIconFromConfig(this); } catch (Throwable ignored) {}
         refreshSdkRow();
         statusRefresher.run();
     }

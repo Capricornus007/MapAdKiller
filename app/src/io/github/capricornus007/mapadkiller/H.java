@@ -74,6 +74,46 @@ public final class H {
         return n;
     }
 
+    /**
+     * 只挂「无参 + 返回 boolean」的重载。
+     *
+     * 混淆过的单字母方法名（SplashAdManager.F/z 这类）在大版本更新后会整体重排，
+     * 用 hookAll 按名强改返回值风险极大 —— 一旦撞上的是「是否已完成」之类的状态查询，
+     * 就等于把 App 永远钉在 false 上（实测表现：卡开屏，按返回键才进得去）。
+     * 所以对这类方法一律只认 ()Z 签名，并且默认只观察、不篡改。
+     */
+    public static int hookAllBool0(Class<?> c, String method, String id, XposedInterface.Hooker hooker) {
+        if (c == null) return 0;
+        int n = 0;
+        for (Class<?> k = c; k != null && k != Object.class; k = k.getSuperclass()) {
+            for (Method m : k.getDeclaredMethods()) {
+                if (!m.getName().equals(method)) continue;
+                if (Modifier.isAbstract(m.getModifiers())) continue;
+                if (m.getParameterTypes().length != 0) continue;
+                Class<?> rt = m.getReturnType();
+                if (rt != boolean.class && rt != Boolean.class) continue;
+                if (hookMethod(m, id + "#" + k.getSimpleName() + "#" + n, hooker)) n++;
+            }
+        }
+        count(n > 0, c, method + (n > 0 ? "()Z*(" + n + ")" : " MISS"));
+        return n;
+    }
+
+    /** 直通观察 Hooker：原样放行，只把首次返回值记一条日志（用于校准混淆方法语义）。 */
+    public static XposedInterface.Hooker observe(final String what) {
+        return new XposedInterface.Hooker() {
+            private boolean once;
+            @Override public Object intercept(XposedInterface.Chain chain) throws Throwable {
+                Object r = chain.proceed();
+                if (!once) {
+                    once = true;
+                    log(Log.INFO, MainHook.TAG, "OBSERVE " + what + " -> " + r);
+                }
+                return r;
+            }
+        };
+    }
+
     /** 按精确签名 hook */
     public static void hookSig(Class<?> c, String method, String id, XposedInterface.Hooker hooker, Class<?>... params) {
         if (c == null) return;

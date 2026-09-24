@@ -702,36 +702,13 @@ public final class SdkAutoBlock {
             if ("<init>".equals(nm) || "<clinit>".equals(nm)) continue;
             if (!isSdkClass(m.getDeclaringClass().getName())) continue;   // 双保险
 
-            if (AD_METHODS.contains(nm)) {
-                // 开屏加载器一律不吞：吞了它的 loadAd，开屏等回调的那条链永远等不到结果，
-                // 表现就是「卡在启动界面 + 一层不会消失的暗色蒙层，要按返回才进主页」。
-                if (isSplashPath(c.getName()) || isSplashPath(nm)) continue;
-                if (hookAdMethod(m)) any = true;
-                continue;
-            }
+            if (AD_METHODS.contains(nm)) { if (hookAdMethod(m)) any = true; continue; }
 
             if (isLifecycleEntry(nm) && m.getReturnType() != void.class) {
                 if (hookContextSwap(m)) any = true;
             }
         }
         return any;
-    }
-
-    /**
-     * 是不是开屏（splash）链路。
-     *
-     * 真机实证（百度 21.20.x）：`com.meishu.sdk.core.ad.splash.SplashAdLoader#loadAd`
-     * 被本类吞掉之后，App 开屏等待这条回调的流程**永远等不到结果** ——
-     * 用户看到的就是「一直卡在启动界面，要手动按返回键才进主页」，
-     * 而且屏幕上留着一层不消失的暗色蒙层（真机截图确认）。
-     *
-     * 开屏广告根本不需要在这一层拦：BmapHooks 已经在视图层用 alpha=0 兜底，
-     * 既零曝光、又完全不影响开屏自己的收尾节奏。
-     */
-    private static boolean isSplashPath(String name) {
-        if (name == null) return false;
-        String n = name.toLowerCase();
-        return n.contains("splash") || n.contains("kaiping");
     }
 
     /** 是不是"广告 SDK 自己的类"——框架/系统类一律 false，这是防全局误伤的闸门 */
@@ -756,7 +733,6 @@ public final class SdkAutoBlock {
     }
 
     private static boolean hookAdMethod(final Method m) {
-        if (isSplashPath(m.getDeclaringClass().getName()) || isSplashPath(m.getName())) return false;
         final String id = m.getDeclaringClass().getName() + "#" + m.getName();
         if (!hookedMethods.add(id)) return false;
         try {
